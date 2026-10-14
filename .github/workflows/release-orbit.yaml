@@ -372,6 +372,12 @@ jobs:
           codesign -dv /tmp/t3dmg/*.app
           mkdir -p release-macos
           cp "$dmg" "release-macos/t3-${VERSION}-macos-arm64.dmg"
+          # The updater zip and latest-mac.yml must keep their original
+          # electron-builder names: latest-mac.yml references the zip by
+          # name, so renaming either one breaks the update feed.
+          cp release-desktop/*.zip release-macos/
+          cp release-desktop/latest*.yml release-macos/ 2>/dev/null || true
+          cp release-desktop/*.blockmap release-macos/ 2>/dev/null || true
           cd release-macos
           shasum -a 256 "t3-${VERSION}-macos-arm64.dmg" > "t3-${VERSION}-macos-arm64.dmg.sha256"
 
@@ -383,12 +389,10 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           dmg="t3-${VERSION}-macos-arm64.dmg"
-          # zip is what electron-updater actually downloads on macOS.
-          assets=("$dmg" "$dmg.sha256" "t3-${VERSION}-macos-arm64.zip")
-          # electron-updater feed manifests + differential-update maps.
-          # electron-builder emits these next to the dmg when a publish
-          # config exists, even with --publish never.
-          for f in *.yml *.blockmap; do
+          # zip is what electron-updater actually downloads on macOS; it and
+          # the latest-mac.yml manifest keep their electron-builder names.
+          assets=("$dmg" "$dmg.sha256")
+          for f in *.zip *.yml *.blockmap; do
             [[ "$f" == builder-debug.yml ]] && continue
             assets+=("$f")
           done

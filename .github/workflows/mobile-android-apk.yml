@@ -8,9 +8,9 @@ name: Mobile Android APK
 # instead of chaining off mobile-eas-production.yml; runs with nothing new exit
 # early.
 on:
-  schedule:
-    # Avoid minute zero, when GitHub scheduled jobs are busiest.
-    - cron: "23 * * * *"
+  # ponytail(orbit): schedule disabled on the Orbit fork — the hourly EAS/Play
+  # nightly needs upstream's credentials. Release APKs come from
+  # release-orbit.yaml instead. Manual runs stay available.
   workflow_dispatch:
 
 concurrency:
