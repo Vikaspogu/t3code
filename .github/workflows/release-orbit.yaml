@@ -76,7 +76,7 @@ jobs:
         run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@a1c548be6d6a0c310068aee4966747b1b2da6970 # stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
           toolchain: "1.90.0"
 
