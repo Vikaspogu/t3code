@@ -1,4 +1,8 @@
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as OrbitVoiceCalls from "./orbit-voice/VoiceCalls.ts";
+import * as OrbitNativeVoice from "./orbit-voice/NativeVoice.ts";
+import * as OrbitT3Host from "./orbit-voice/T3Host.ts";
+import * as OrbitRuntimeAccess from "./orbit-voice/RuntimeAccess.ts";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Clock from "effect/Clock";
 import * as Random from "effect/Random";
@@ -164,6 +168,7 @@ import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain"
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
+import * as EffectOutbox from "./orchestration-v2/EffectOutbox.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
@@ -545,6 +550,14 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  OrbitVoiceCalls.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        OrbitNativeVoice.layer,
+        OrbitT3Host.layer.pipe(Layer.provide(EffectOutbox.layer)),
+      ),
+    ),
+  ),
   AgentAwarenessRelay.layer,
   // Asks T3 Connect to deliver webhooks it held while this environment was offline.
   HeldHooksWaker.layer,
@@ -613,6 +626,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 );
 
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
+  Layer.provideMerge(OrbitRuntimeAccess.layer),
   Layer.provideMerge(layerPtyAdapter),
   // Search, prepare, status inspection, and turn launch share one registry
   // cache so every client and provider instance sees the same prepared agents.

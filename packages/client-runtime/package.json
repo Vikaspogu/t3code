@@ -123,6 +123,14 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./voice": {
+      "types": "./src/voice/controller.ts",
+      "default": "./src/voice/controller.ts"
+    },
+    "./voice/mobile": {
+      "types": "./src/voice/mobile.ts",
+      "default": "./src/voice/mobile.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

@@ -150,6 +150,7 @@ import { useThreadQueuedCount } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
+import { VoiceCallBar } from "../orbit-voice/VoiceCallBar";
 
 export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
@@ -343,6 +344,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     () => threadDevicePreviews(deviceState.data, props.selectedThread.id),
     [deviceState.data, props.selectedThread.id],
   );
+  const openVoiceSheet = useCallback(() => {
+    navigation.navigate("ThreadVoice", {
+      environmentId: props.environmentId,
+      threadId: props.selectedThread.id,
+      providerInstanceId: reportedModelSelection?.instanceId ?? undefined,
+    });
+  }, [
+    navigation,
+    props.environmentId,
+    props.selectedThread.id,
+    reportedModelSelection?.instanceId,
+  ]);
+
   const openDevicePreview = useCallback(() => {
     Keyboard.dismiss();
     navigation.navigate("ThreadDevicePreview", {
@@ -1428,6 +1442,14 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     </View>
                   ) : (
                     <>
+                      <VoiceCallBar
+                        target={{
+                          environmentId: props.environmentId,
+                          threadId: props.selectedThread.id,
+                        }}
+                        providerInstanceId={reportedModelSelection?.instanceId ?? undefined}
+                        onOpenSheet={openVoiceSheet}
+                      />
                       <ThreadComposer
                         canOperateThread={props.canOperateThread}
                         reportedModelSelection={reportedModelSelection}

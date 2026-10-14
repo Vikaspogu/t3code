@@ -1,4 +1,5 @@
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
+import { VoiceButton, VoiceCallBar } from "../features/orbit-voice/VoiceControls";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -11756,8 +11757,42 @@ export default function ChatView(props: ChatViewProps) {
                               }
                             />
                           ) : null}
+                          <VoiceCallBar
+                            target={{
+                              environmentId: activeThread.environmentId,
+                              threadId: activeThread.id,
+                            }}
+                            onOpen={() =>
+                              useRightPanelStore.getState().setThreadPanelOpen(
+                                {
+                                  environmentId: activeThread.environmentId,
+                                  threadId: activeThread.id,
+                                },
+                                threadPanelPresentation,
+                                true,
+                              )
+                            }
+                          />
                           {!composerMounted ? null : (
                             <ChatComposer
+                              voiceControls={
+                                <VoiceButton
+                                  target={{
+                                    environmentId: activeThread.environmentId,
+                                    threadId: activeThread.id,
+                                  }}
+                                  onOpen={() =>
+                                    useRightPanelStore.getState().setThreadPanelOpen(
+                                      {
+                                        environmentId: activeThread.environmentId,
+                                        threadId: activeThread.id,
+                                      },
+                                      threadPanelPresentation,
+                                      true,
+                                    )
+                                  }
+                                />
+                              }
                               canOperateThread={canOperateThread}
                               reportedModelSelection={reportedModelSelection}
                               multipleModelSelections={multipleModelSelections}

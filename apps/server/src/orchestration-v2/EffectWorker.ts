@@ -263,7 +263,8 @@ export const layerExecutor: Layer.Layer<
                     if (
                       !("turnCompleted" in error) ||
                       !error.turnCompleted ||
-                      effect.request.type !== "provider-turn.steer"
+                      effect.request.type !== "provider-turn.steer" ||
+                      effect.request.strictTarget === true
                     ) {
                       return yield* error;
                     }

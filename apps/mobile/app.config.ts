@@ -315,7 +315,11 @@ const config: ExpoConfig = {
     // withAndroidPredictiveBackCompat on Android 13-15.
     predictiveBackGestureEnabled: true,
     // expo-sensors declares this for its pedometer, which the app does not use.
-    blockedPermissions: ["android.permission.ACTIVITY_RECOGNITION"],
+    blockedPermissions: [
+      "android.permission.ACTIVITY_RECOGNITION",
+      // Injected by @config-plugins/react-native-webrtc; overlay windows are not used.
+      "android.permission.SYSTEM_ALERT_WINDOW",
+    ],
   },
   web: {
     favicon: variant.assets.appIcon,
@@ -347,6 +351,13 @@ const config: ExpoConfig = {
       },
     ],
     "expo-secure-store",
+    [
+      "@config-plugins/react-native-webrtc",
+      {
+        microphonePermission:
+          "Allow $(PRODUCT_NAME) to use your microphone for voice calls with your coding agent.",
+      },
+    ],
     "expo-sqlite",
     ...(isIosPersonalTeamBuild
       ? [sharingPlugin]

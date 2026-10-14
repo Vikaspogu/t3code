@@ -1525,6 +1525,7 @@ export interface ChatComposerHandle {
 // --------------------------------------------------------------------------
 
 export interface ChatComposerProps {
+  voiceControls?: ReactNode;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   canOperateThread: boolean;
@@ -7081,6 +7082,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         : "Ask anything...")}
                 </button>
                 {collapsedComposerImagePreviews}
+                {props.voiceControls}
                 <button
                   type="button"
                   data-chat-composer-transition-actions="true"
@@ -7728,6 +7730,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }
                   className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
                 >
+                  {props.voiceControls}
                   {showComposerAttachAction ? (
                     <>
                       <input

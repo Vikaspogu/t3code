@@ -20,6 +20,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
+  ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -2979,6 +2980,50 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           assert.equal(reclaimed.value.attemptCount, 2);
           yield* outbox.succeed({ effectId: reclaimed.value.id, workerId: "recovery-worker" });
         }
+      }),
+  );
+
+  it.effect.each(["pending", "running"] as const)(
+    "cancels strict steering in %s state after process loss without replay",
+    (status) =>
+      Effect.gen(function* () {
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const effect = {
+          id: `effect:strict-process-loss:${status}`,
+          commandId: CommandId.make(`command:strict-process-loss:${status}`),
+          threadId: ThreadId.make(`thread:strict-process-loss:${status}`),
+          request: {
+            type: "provider-turn.steer" as const,
+            providerSessionId: ProviderSessionId.make("session:strict"),
+            providerThreadId: ProviderThreadId.make("thread:strict"),
+            providerTurnId: ProviderTurnId.make("turn:strict"),
+            messageId: MessageId.make("message:strict"),
+            strictTarget: true,
+          },
+        };
+        yield* outbox.enqueue([effect]);
+        if (status === "running") {
+          const claimed = yield* outbox.claimNext({ workerId: "lost", leaseDurationMs: 30_000 });
+          assert.isTrue(Option.isSome(claimed));
+          if (Option.isSome(claimed)) assert.equal(claimed.value.id, effect.id);
+        }
+        const before = yield* outbox.get(effect.id);
+        assert.isTrue(Option.isSome(before));
+        if (Option.isSome(before)) {
+          assert.equal(before.value.status, status);
+          assert.deepEqual(before.value.request, effect.request);
+        }
+        yield* outbox.reconcileAfterProcessLoss;
+        yield* outbox.enqueue([effect]);
+        const after = yield* outbox.get(effect.id);
+        assert.isTrue(Option.isSome(after));
+        if (Option.isSome(after)) {
+          assert.equal(after.value.status, "cancelled");
+          assert.deepEqual(after.value.request, effect.request);
+        }
+        assert.isTrue(
+          Option.isNone(yield* outbox.claimNext({ workerId: "new", leaseDurationMs: 30_000 })),
+        );
       }),
   );
 

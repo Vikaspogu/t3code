@@ -2970,7 +2970,12 @@ export const OrchestrationV2Command = Schema.Union([
         type: Schema.Literal("defer_start"),
         workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
       }),
-      Schema.Struct({ type: Schema.Literal("steer_active"), targetRunId: RunId }),
+      Schema.Struct({
+        type: Schema.Literal("steer_active"),
+        targetRunId: RunId,
+        // Refuse a late or changed target instead of starting another turn.
+        strictTarget: Schema.optional(Schema.Boolean),
+      }),
       Schema.Struct({ type: Schema.Literal("restart_active"), targetRunId: RunId }),
       Schema.Struct({ type: Schema.Literal("queue_after_active") }),
       Schema.Struct({ type: Schema.Literal("start_immediately") }),

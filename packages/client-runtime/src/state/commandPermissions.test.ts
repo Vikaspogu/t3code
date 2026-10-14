@@ -8,6 +8,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  clientRpcRequiredScopes,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   ThreadId,
@@ -59,6 +61,19 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it("requires operate permission for voice commands and read permission for captions", () => {
+    for (const method of [
+      "orbitVoice.start",
+      "orbitVoice.submit",
+      "orbitVoice.end",
+      "orbitVoice.renewPresence",
+    ]) {
+      expect(clientRpcRequiredScopes(method, {})).toEqual([AuthOrchestrationOperateScope]);
+    }
+    expect(clientRpcRequiredScopes("orbitVoice.snapshot", {})).toEqual([
+      AuthOrchestrationReadScope,
+    ]);
+  });
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -165,6 +165,14 @@
       ]
     },
     {
+      "name": "@config-plugins/react-native-webrtc",
+      "version": "15.0.2",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) react-native-webrtc contributors"]
+      }
+    },
+    {
       "name": "@connectrpc/connect",
       "version": "1.7.0",
       "generatedNotice": {

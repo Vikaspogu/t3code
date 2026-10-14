@@ -14,6 +14,7 @@ import {
 } from "../../provider/CodexTurnTokenUsage.ts";
 import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
+import * as VoiceRuntimeAccess from "../../orbit-voice/RuntimeAccess.ts";
 import {
   buildCodexInitializeParams,
   codexAppServerEnvironment,
@@ -1624,10 +1625,20 @@ export const createCodexAdapterV2 = (
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
 
+    const mergedEnvironment = yield* mergeProviderInstanceEnvironment(environment, hostEnvironment);
+    const voiceRuntime = yield* Effect.serviceOption(VoiceRuntimeAccess.RuntimeAccess);
+    if (Option.isSome(voiceRuntime)) {
+      yield* voiceRuntime.value.register(instanceId, {
+        settings,
+        environment: mergedEnvironment,
+        ...(hooks.resolveRuntime ? { resolveRuntime: hooks.resolveRuntime } : {}),
+      });
+    }
+
     return yield* makeCodexAdapterV2({
       instanceId,
       settings,
-      environment: yield* mergeProviderInstanceEnvironment(environment, hostEnvironment),
+      environment: mergedEnvironment,
       clientFactory,
       crypto,
       fileSystem,

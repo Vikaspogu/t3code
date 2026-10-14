@@ -52,6 +52,32 @@ export function formatDuration(durationMs: number): string {
   return parts.join(" ");
 }
 
+export function formatWorkingTimer(startIso: string, endIso: string): string | null {
+  const startedAtMs = Date.parse(startIso);
+  const endedAtMs = Date.parse(endIso);
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(endedAtMs)) {
+    return null;
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((endedAtMs - startedAtMs) / 1000));
+  if (elapsedSeconds < 60) {
+    return `${elapsedSeconds}s`;
+  }
+
+  return formatDuration(elapsedSeconds * 1_000);
+}
+
+export function formatWorkingTimerNow(startIso: string): string {
+  return formatWorkingTimer(startIso, new Date().toISOString()) ?? "0s";
+}
+
+/** m:ss clock for the call header chip and static durations (Completed for 0:41). */
+export function formatCallClock(durationSeconds: number): string {
+  const minutes = Math.floor(durationSeconds / 60);
+  const seconds = durationSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 function isLatestRunSettled(
   latestRun: LatestRunTiming | null,
   runtime: RuntimeActivityState | null,

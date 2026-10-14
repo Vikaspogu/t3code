@@ -19,8 +19,41 @@ import {
   type AnyProviderAdapterDriver,
 } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 
 const isProviderSetupError = Schema.is(ProviderSetupError);
+
+export const withProviderInstanceAccess = <A, E, R>(
+  instances: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
+  instance: ProviderInstance,
+  task: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | ProviderSetupError, R | Scope.Scope> =>
+  Effect.gen(function* () {
+    if (!instance.auth) return yield* task;
+    const binding = instance.auth.credentialBinding;
+    const related = binding
+      ? (yield* instances.listInstances).filter(
+          (peer) =>
+            peer.auth?.credentialBinding?.key === binding.key &&
+            peer.auth.credentialBinding.owner === binding.owner,
+        )
+      : [instance];
+    for (const peer of related) {
+      if (peer.auth?.isChangingCredentials && (yield* peer.auth.isChangingCredentials)) {
+        return yield* new ProviderSetupError({
+          instanceId: instance.instanceId,
+          operation: "session",
+          detail: "This provider's sign-in is changing. Try again after it finishes.",
+        });
+      }
+    }
+    let admitted: Effect.Effect<A, E | ProviderSetupError, R | Scope.Scope> = task;
+    // Shared credential changes must interrupt a peer's startup too.
+    for (const peer of related) {
+      if (peer.auth?.withAccess) admitted = peer.auth.withAccess(admitted);
+    }
+    return yield* admitted;
+  });
 
 export class ProviderAdapterRegistryLookupError extends Schema.TaggedError<ProviderAdapterRegistryLookupError>()(
   "ProviderAdapterRegistryLookupError",
@@ -91,37 +124,11 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
             return Effect.succeed({
               ...adapter,
               openSession: (input) => {
-                const open = Effect.gen(function* () {
-                  const binding = auth.credentialBinding;
-                  const related = binding
-                    ? (yield* instances.listInstances).filter(
-                        (instance) =>
-                          instance.auth?.credentialBinding?.key === binding.key &&
-                          instance.auth.credentialBinding.owner === binding.owner,
-                      )
-                    : [instance];
-                  for (const instance of related) {
-                    if (
-                      instance.auth?.isChangingCredentials &&
-                      (yield* instance.auth.isChangingCredentials)
-                    )
-                      return yield* new ProviderSetupError({
-                        instanceId,
-                        operation: "session",
-                        detail: "This provider's sign-in is changing. Try again after it finishes.",
-                      });
-                  }
-                  let admitted: Effect.Effect<
-                    ProviderAdapter.ProviderAdapterV2SessionRuntime,
-                    ProviderAdapter.ProviderAdapterV2Error | ProviderSetupError,
-                    Scope.Scope
-                  > = adapter.openSession(input);
-                  // Shared credential changes must interrupt a peer's startup too.
-                  for (const peer of related) {
-                    if (peer.auth?.withAccess) admitted = peer.auth.withAccess(admitted);
-                  }
-                  return yield* admitted;
-                });
+                const open = withProviderInstanceAccess(
+                  instances,
+                  instance,
+                  adapter.openSession(input),
+                );
                 return open.pipe(
                   Effect.mapError((cause) =>
                     isProviderSetupError(cause)

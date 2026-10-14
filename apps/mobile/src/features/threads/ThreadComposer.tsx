@@ -82,6 +82,7 @@ import {
   ComposerInlineControl,
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
+import { VoiceComposerButton } from "../orbit-voice/VoiceComposerButton";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import {
   composerStripAttachments,
@@ -1076,6 +1077,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             ) : null}
             {!isExpanded ? (
               <View className="flex-row items-center">
+                <VoiceComposerButton
+                  target={{
+                    environmentId: props.environmentId,
+                    threadId: props.selectedThread.id,
+                  }}
+                  providerInstanceId={currentModelSelection.instanceId}
+                />
                 <ComposerDictationStartAction
                   state={voiceInput.state}
                   isAvailable={voiceInput.isAvailable}
@@ -1169,6 +1177,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   </View>
                 )}
                 <View className="shrink-0 flex-row items-center">
+                  <VoiceComposerButton
+                    target={{
+                      environmentId: props.environmentId,
+                      threadId: props.selectedThread.id,
+                    }}
+                    providerInstanceId={currentModelSelection.instanceId}
+                  />
                   <ComposerDictationPrimaryAction
                     state={voiceInput.state}
                     presentation={voicePresentation}

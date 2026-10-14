@@ -21,6 +21,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { VoicePanel } from "../../features/orbit-voice/VoiceControls";
 
 const GitActionsControl = memo(BaseGitActionsControl);
 
@@ -102,6 +103,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     >
       {(density) => (
         <>
+          <VoicePanel target={{ environmentId: props.environmentId, threadId: props.threadId }} />
           <ThreadDetailsSection
             headingId="thread-details-workspace-heading"
             title="Workspace"

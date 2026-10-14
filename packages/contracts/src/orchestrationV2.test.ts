@@ -586,6 +586,29 @@ describe("orchestration V2 contracts", () => {
     expect(checkpoint.parentCheckpointId).toBe(CheckpointId.make("checkpoint-root-1"));
   });
 
+  it.each([undefined, false, true])(
+    "preserves strict steering target option %s",
+    (strictTarget) => {
+      const dispatchMode = {
+        type: "steer_active",
+        targetRunId: "run-1",
+        ...(strictTarget === undefined ? {} : { strictTarget }),
+      };
+      const command = decodeOrchestrationV2Command({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: "command-1",
+        threadId: "thread-1",
+        messageId: "message-1",
+        text: "correction",
+        attachments: [],
+        dispatchMode,
+      });
+      expect(command.type === "message.dispatch" && command.dispatchMode).toEqual(dispatchMode);
+    },
+  );
+
   it("decodes command and domain event shapes for command-to-projection tests", () => {
     const command = decodeOrchestrationV2Command({
       type: "message.dispatch",

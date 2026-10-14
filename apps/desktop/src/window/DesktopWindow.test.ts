@@ -20,6 +20,10 @@ import { vi } from "vite-plus/test";
 vi.mock("electron", async (importOriginal) => ({
   ...(await importOriginal<typeof import("electron")>()),
   session: {
+    defaultSession: {
+      setPermissionRequestHandler: vi.fn(),
+      setPermissionCheckHandler: vi.fn(),
+    },
     fromPartition: vi.fn(() => ({
       getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 t3code/1.2.3"),
       setPermissionRequestHandler: vi.fn(),
@@ -635,6 +639,60 @@ describe("DesktopWindow", () => {
       }),
     );
   });
+
+  it.effect("grants mic only to the app origin and keeps other permissions default-granted", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+
+        const session = Electron.session.defaultSession as unknown as {
+          setPermissionRequestHandler: ReturnType<typeof vi.fn>;
+          setPermissionCheckHandler: ReturnType<typeof vi.fn>;
+        };
+        const requestHandler = session.setPermissionRequestHandler.mock.calls.at(-1)?.[0];
+        const checkHandler = session.setPermissionCheckHandler.mock.calls.at(-1)?.[0];
+        assert.isDefined(requestHandler);
+        assert.isDefined(checkHandler);
+
+        // The dev applicationUrl is t3code-dev://app/ (origin t3code-dev://app).
+        const granted: boolean[] = [];
+        const request = (permission: string, details: Record<string, string>) =>
+          requestHandler(
+            {} as Electron.WebContents,
+            permission,
+            (allow: boolean) => granted.push(allow),
+            details,
+          );
+
+        request("media", { securityOrigin: "t3code-dev://app" });
+        // securityOrigin wins over a matching requestingUrl.
+        request("media", {
+          securityOrigin: "https://evil.example",
+          requestingUrl: "t3code-dev://app/",
+        });
+        // Sandboxed same-origin frames (MCP apps) have an opaque origin.
+        request("media", { securityOrigin: "null", requestingUrl: "t3code-dev://app/" });
+        request("media", { requestingUrl: "t3code-dev://app/settings" });
+        // Everything else keeps Electron's default-grant behavior.
+        request("notifications", {});
+        request("clipboard-sanitized-write", {});
+        assert.deepEqual(granted, [true, false, false, true, true, true]);
+
+        const check = (permission: string, origin: string): boolean =>
+          checkHandler({} as Electron.WebContents, permission, origin, {});
+        assert.isTrue(check("media", "t3code-dev://app"));
+        assert.isFalse(check("media", "https://evil.example"));
+        assert.isFalse(check("media", "null"));
+        assert.isTrue(check("notifications", "https://anything.example"));
+      }).pipe(Effect.provide(layer));
+    }),
+  );
 
   it.effect("does not open a development window until the backend is ready", () =>
     Effect.gen(function* () {
