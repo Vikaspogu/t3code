@@ -35,18 +35,22 @@ jobs:
     permissions:
       contents: write
     steps:
-      # checkout v6 + sparse exclude of .repos: the vendored .repos tree
-      # contains orphaned gitlinks that break checkout's submodule handling
-      # (same pattern as upstream's ci.yml).
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-          # Build steps run third-party code; do not leave the write-scoped
-          # token in .git/config for them (publish uses GH_TOKEN env instead).
-          persist-credentials: false
+      # Manual checkout: the vendored .repos tree has orphaned gitlinks that
+      # break actions/checkout's submodule handling even with submodules
+      # disabled (same workaround as upstream's desktop-macos-preview.yml).
+      # Anonymous fetch = no token on disk for the third-party build steps.
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
 
       - name: Resolve version
         id: meta
