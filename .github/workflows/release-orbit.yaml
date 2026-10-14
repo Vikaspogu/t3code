@@ -270,8 +270,14 @@ jobs:
             exit 1
           fi
           build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          unsigned="app/build/outputs/apk/release/app-release-unsigned.apk"
-          test -f "$unsigned"
+          # expo prebuild's template debug-signs release builds, so the output is
+          # app-release.apk; apksigner re-signs it with the release key below.
+          unsigned="app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$unsigned" ]]; then
+            echo "expected APK missing: $unsigned; actual outputs:" >&2
+            ls -R app/build/outputs/apk/ >&2 || true
+            exit 1
+          fi
           base64 -d <<<"$ORBIT_ANDROID_KEYSTORE_B64" > /tmp/orbit-release.jks
           out="$GITHUB_WORKSPACE/release-android/t3-${VERSION}-android-arm64.apk"
           mkdir -p "$(dirname "$out")"
@@ -375,5 +381,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
           dmg="t3-${VERSION}-macos-arm64.dmg"
-          gh release upload "orbit-v${VERSION}" --clobber "$dmg" "$dmg.sha256"
+          assets=("$dmg" "$dmg.sha256")
+          # electron-updater feed manifests + differential-update maps.
+          # electron-builder emits these next to the dmg when a publish
+          # config exists, even with --publish never.
+          for f in *.yml *.blockmap; do
+            [[ "$f" == builder-debug.yml ]] && continue
+            assets+=("$f")
+          done
+          gh release upload "orbit-v${VERSION}" --clobber "${assets[@]}"
