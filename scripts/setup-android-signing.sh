@@ -4,9 +4,11 @@
 # It generates a release keystore, stores it in GitHub Actions secrets,
 # and writes a local backup you must move into your password manager.
 set -euo pipefail
+umask 077 # keystore material must never be world-readable, even briefly
 
 BACKUP_DIR="$HOME/orbit-android-release-backup"
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR" # a pre-existing dir may carry a looser mode
 cd "$BACKUP_DIR"
 
 # Never silently rotate the release key: APKs signed with the old key could no
@@ -25,11 +27,12 @@ keytool -genkeypair -v \
   -keystore orbit-release.jks \
   -alias orbit-release \
   -keyalg RSA -keysize 4096 -validity 10000 \
-  -storepass "$STORE_PW" -keypass "$STORE_PW" \
+  -storepass env:STORE_PW -keypass env:STORE_PW \
   -dname "CN=Orbit Mobile, O=Vikaspogu, C=US"
 
 # Portable single-line base64 (GNU wraps at 76 cols, BSD has no -w flag).
 base64 < orbit-release.jks | tr -d '\n' > keystore.b64
+trap 'rm -f keystore.b64' EXIT # clean up even when a gh secret set fails
 
 gh secret set ORBIT_ANDROID_KEYSTORE_B64 --repo Vikaspogu/t3code < keystore.b64
 printf %s "$STORE_PW" | gh secret set ORBIT_ANDROID_KEYSTORE_PASSWORD --repo Vikaspogu/t3code

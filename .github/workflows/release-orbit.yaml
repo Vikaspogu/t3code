@@ -64,11 +64,13 @@ jobs:
           set -euo pipefail
           tag="orbit-v${{ steps.meta.outputs.version }}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            # A re-run after force-moving a tag must not ship assets built from
-            # the new commit under a release that still targets the old one.
+            # A re-run must not ship assets built from this commit under a
+            # release (or tag) that still targets an older one: deleting the
+            # release also deletes the tag, and the recreate below re-points
+            # both at GITHUB_SHA.
             target="$(gh release view "$tag" --json targetCommitish --jq .targetCommitish)"
             if [[ "$target" != "$GITHUB_SHA" ]]; then
-              gh release delete "$tag" --yes --cleanup-tag=false
+              gh release delete "$tag" --yes
               gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
                 --notes "Orbit release ${{ steps.meta.outputs.version }}"
             fi
@@ -259,7 +261,8 @@ jobs:
           ORBIT_ANDROID_KEY_PASSWORD: ${{ secrets.ORBIT_ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          trap 'rm -f /tmp/orbit-release.jks /tmp/orbit-aligned.apk' EXIT
+          umask 077 # decoded keystore must not be readable by other jobs/users
+          trap 'rm -f /tmp/orbit-release.jks /tmp/orbit-aligned.apk' EXIT TERM
           if [[ -z "$ORBIT_ANDROID_KEYSTORE_B64" || -z "$ORBIT_ANDROID_KEYSTORE_PASSWORD" || -z "$ORBIT_ANDROID_KEY_ALIAS" || -z "$ORBIT_ANDROID_KEY_PASSWORD" ]]; then
             echo "One or more ORBIT_ANDROID_* secrets are missing. Run scripts/setup-android-signing.sh once." >&2
             exit 1
