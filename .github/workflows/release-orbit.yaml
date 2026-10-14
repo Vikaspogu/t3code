@@ -91,13 +91,6 @@ jobs:
         with:
           toolchain: "1.95.0"
 
-      - name: Build resource monitor
-        run: |
-          cargo build --release --locked --manifest-path native/resource-monitor/Cargo.toml
-          mkdir -p apps/server/dist/resource-monitor/linux-x64
-          cp native/resource-monitor/target/release/t3-resource-monitor \
-            apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
-
       - name: Stamp release version
         # The exe bakes apps/server/package.json's version into `t3 --version`;
         # stamp it before building so installers can verify the archive.
@@ -111,6 +104,15 @@ jobs:
           vp run --filter @t3tools/web build
           node apps/server/scripts/cli.ts build
           node apps/server/scripts/cli.ts build-exe --target linux-x64
+
+      # Staging happens after "Build server dist": `vp pack` wipes
+      # apps/server/dist, so an earlier copy would be deleted before archiving.
+      - name: Build resource monitor
+        run: |
+          cargo build --release --locked --manifest-path native/resource-monitor/Cargo.toml
+          mkdir -p apps/server/dist/resource-monitor/linux-x64
+          cp native/resource-monitor/target/release/t3-resource-monitor \
+            apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
 
       - name: Build CLI archive
         run: |
