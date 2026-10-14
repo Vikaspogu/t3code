@@ -70,7 +70,7 @@ jobs:
             # both at GITHUB_SHA.
             target="$(gh release view "$tag" --json targetCommitish --jq .targetCommitish)"
             if [[ "$target" != "$GITHUB_SHA" ]]; then
-              gh release delete "$tag" --yes
+              gh release delete "$tag" --yes --cleanup-tag
               gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
                 --notes "Orbit release ${{ steps.meta.outputs.version }}"
             fi

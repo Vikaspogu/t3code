@@ -27,12 +27,12 @@ keytool -genkeypair -v \
   -keystore orbit-release.jks \
   -alias orbit-release \
   -keyalg RSA -keysize 4096 -validity 10000 \
-  -storepass env:STORE_PW -keypass env:STORE_PW \
+  -storepass:env STORE_PW -keypass:env STORE_PW \
   -dname "CN=Orbit Mobile, O=Vikaspogu, C=US"
 
 # Portable single-line base64 (GNU wraps at 76 cols, BSD has no -w flag).
-base64 < orbit-release.jks | tr -d '\n' > keystore.b64
 trap 'rm -f keystore.b64' EXIT # clean up even when a gh secret set fails
+base64 < orbit-release.jks | tr -d '\n' > keystore.b64
 
 gh secret set ORBIT_ANDROID_KEYSTORE_B64 --repo Vikaspogu/t3code < keystore.b64
 printf %s "$STORE_PW" | gh secret set ORBIT_ANDROID_KEYSTORE_PASSWORD --repo Vikaspogu/t3code
