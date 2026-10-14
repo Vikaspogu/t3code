@@ -60,6 +60,8 @@ jobs:
       - name: Create release if missing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job: gh resolves the repo from this variable.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           tag="orbit-v${{ steps.meta.outputs.version }}"
