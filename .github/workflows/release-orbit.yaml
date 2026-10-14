@@ -34,8 +34,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -47,6 +45,12 @@ jobs:
           else
             version="${GITHUB_REF_NAME#orbit-v}"
           fi
+          # Strict charset: the value is interpolated into later run steps and
+          # $GITHUB_OUTPUT, so reject shell metacharacters and newlines.
+          if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            echo "Invalid version: '$version'" >&2
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node
@@ -57,7 +61,8 @@ jobs:
       - name: Setup vite-plus
         run: |
           corepack enable
-          npm install -g vite-plus@1.0.0  # must match the pnpm catalog pin
+          # Pin comes from the pnpm catalog so the two cannot drift apart.
+          npm install -g "vite-plus@$(grep -oP '^ *vite-plus: *\K[0-9.]+' pnpm-workspace.yaml)"
 
       - name: Install dependencies
         run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
@@ -103,8 +108,8 @@ jobs:
           archive="release-cli/t3-${version}-linux-x64.tar.gz"
           test -f "$archive"
           mkdir -p /tmp/verify && tar -xzf "$archive" -C /tmp/verify
-          reported=$(/tmp/verify/t3-${version}-linux-x64/t3 --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-orbit\.[0-9]+)?' | head -1)
-          [[ "$reported" == "$version" ]] || { echo "version mismatch: archive reports '$reported', expected '$version'"; exit 1; }
+          reported=$(/tmp/verify/t3-${version}-linux-x64/t3 --version)
+          [[ "$reported" == *"$version"* ]] || { echo "version mismatch: archive reports '$reported', expected '$version'"; exit 1; }
 
       - name: Checksums
         # Per-asset sidecar (install script) + combined SHA256SUMS (server
@@ -117,12 +122,14 @@ jobs:
           sha256sum "t3-${version}-linux-x64.tar.gz" > SHA256SUMS
 
       - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           version="${{ steps.meta.outputs.version }}"
           tag="orbit-v${version}"
           gh release delete "$tag" --yes --cleanup-tag=false 2>/dev/null || true
-          gh release create "$tag" --title "$tag" --notes "Orbit release ${version}"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --notes "Orbit release ${version}"
           gh release upload "$tag" --clobber \
             "release-cli/t3-${version}-linux-x64.tar.gz" \
             "release-cli/t3-${version}-linux-x64.tar.gz.sha256" \

@@ -9,15 +9,16 @@ if [[ $# -ne 1 ]] || [[ ! $1 =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
 fi
 version=$1
 
-case "$(uname -m)" in
-  x86_64) arch=x64 ;;
-  aarch64|arm64) arch=arm64 ;;
-  *) printf 'Unsupported Linux architecture.\n' >&2; exit 2 ;;
-esac
 if [[ $(uname -s) != Linux ]]; then
   printf 'This installer currently supports Linux VMs.\n' >&2
   exit 2
 fi
+# The pipeline publishes linux-x64 only for now.
+if [[ $(uname -m) != x86_64 ]]; then
+  printf 'This installer currently supports x86_64 only.\n' >&2
+  exit 2
+fi
+arch=x64
 
 repo=${ORBIT_GH_REPO:-Vikaspogu/t3code}
 filename="t3-$version-linux-$arch.tar.gz"
