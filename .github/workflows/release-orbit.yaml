@@ -383,7 +383,8 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           dmg="t3-${VERSION}-macos-arm64.dmg"
-          assets=("$dmg" "$dmg.sha256")
+          # zip is what electron-updater actually downloads on macOS.
+          assets=("$dmg" "$dmg.sha256" "t3-${VERSION}-macos-arm64.zip")
           # electron-updater feed manifests + differential-update maps.
           # electron-builder emits these next to the dmg when a publish
           # config exists, even with --publish never.
