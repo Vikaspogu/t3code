@@ -1,0 +1,144 @@
+name: release-orbit
+
+# Orbit fork release pipeline. Publishes the CLI + web archive to GitHub
+# Releases on the Vikaspogu/t3code fork:
+#   - t3-<version>-linux-x64.tar.gz (+ .sha256 sidecar + SHA256SUMS)
+#
+# Trigger: push a tag like `orbit-v0.0.46-orbit.5` or run manually.
+# Desktop (macOS) and mobile (Android) jobs are added on top of this later.
+
+on:
+  push:
+    tags:
+      - "orbit-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (for example 0.0.46-orbit.5)"
+        required: true
+
+permissions:
+  contents: read
+
+# One release per tag: re-runs replace, never stack.
+concurrency:
+  group: orbit-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cli:
+    name: CLI + web archive (linux x64)
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Build steps run third-party code; do not leave the write-scoped
+          # token in .git/config for them (publish uses GH_TOKEN env instead).
+          persist-credentials: false
+
+      - name: Resolve version
+        id: meta
+        env:
+          # Expression-substituted before bash runs, so it must stay out of the
+          # script text: read it from the environment and validate before use.
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+          else
+            version="${GITHUB_REF_NAME#orbit-v}"
+          fi
+          # Strict charset: the value is interpolated into later run steps and
+          # $GITHUB_OUTPUT, so reject shell metacharacters and newlines.
+          if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            echo "Invalid version: '$version'" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          node-version: "25.9.0"
+
+      - name: Setup vite-plus
+        run: |
+          corepack enable
+          # Pin comes from the pnpm catalog so the two cannot drift apart.
+          npm install -g "vite-plus@$(grep -oP '^ *vite-plus: *\K[0-9.]+' pnpm-workspace.yaml)"
+
+      - name: Install dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@a1c548be6d6a0c310068aee4966747b1b2da6970 # stable
+        with:
+          toolchain: "1.90.0"
+
+      - name: Build resource monitor
+        run: |
+          cargo build --release --locked --manifest-path native/resource-monitor/Cargo.toml
+          mkdir -p apps/server/dist/resource-monitor/linux-x64
+          cp native/resource-monitor/target/release/t3-resource-monitor \
+            apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
+
+      - name: Stamp release version
+        # The exe bakes apps/server/package.json's version into `t3 --version`;
+        # stamp it before building so installers can verify the archive.
+        run: |
+          node -e 'const fs=require("fs");const f="apps/server/package.json";const j=JSON.parse(fs.readFileSync(f));j.version="${{ steps.meta.outputs.version }}";fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")'
+
+      - name: Build server dist
+        # Web client first: `cli.ts build` bundles apps/web/dist into the
+        # server package; build-exe then compiles dist-exe/t3 with bun.
+        run: |
+          vp run --filter @t3tools/web build
+          node apps/server/scripts/cli.ts build
+          node apps/server/scripts/cli.ts build-exe --target linux-x64
+
+      - name: Build CLI archive
+        run: |
+          node scripts/build-cli-archive.ts \
+            --platform linux --arch x64 \
+            --version "${{ steps.meta.outputs.version }}"
+
+      - name: Verify archive
+        # Unpack and check the binary reports the release version (guards
+        # against shipping a stale-stamped build).
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          archive="release-cli/t3-${version}-linux-x64.tar.gz"
+          test -f "$archive"
+          mkdir -p /tmp/verify && tar -xzf "$archive" -C /tmp/verify
+          reported=$(/tmp/verify/t3-${version}-linux-x64/t3 --version)
+          [[ "$reported" == *"$version"* ]] || { echo "version mismatch: archive reports '$reported', expected '$version'"; exit 1; }
+
+      - name: Checksums
+        # Per-asset sidecar (install script) + combined SHA256SUMS (server
+        # self-update and SSH provisioning consumers in shared/cliRelease).
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          cd release-cli
+          sha256sum "t3-${version}-linux-x64.tar.gz" > "t3-${version}-linux-x64.tar.gz.sha256"
+          sha256sum "t3-${version}-linux-x64.tar.gz" > SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          tag="orbit-v${version}"
+          gh release delete "$tag" --yes --cleanup-tag=false 2>/dev/null || true
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --notes "Orbit release ${version}"
+          gh release upload "$tag" --clobber \
+            "release-cli/t3-${version}-linux-x64.tar.gz" \
+            "release-cli/t3-${version}-linux-x64.tar.gz.sha256" \
+            "release-cli/SHA256SUMS"
