@@ -35,8 +35,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # checkout v6 + sparse exclude of .repos: the vendored .repos tree
+      # contains orphaned gitlinks that break checkout's submodule handling
+      # (same pattern as upstream's ci.yml).
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
           # Build steps run third-party code; do not leave the write-scoped
           # token in .git/config for them (publish uses GH_TOKEN env instead).
           persist-credentials: false
