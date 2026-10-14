@@ -36,12 +36,20 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Build steps run third-party code; do not leave the write-scoped
+          # token in .git/config for them (publish uses GH_TOKEN env instead).
+          persist-credentials: false
 
       - name: Resolve version
         id: meta
+        env:
+          # Expression-substituted before bash runs, so it must stay out of the
+          # script text: read it from the environment and validate before use.
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="${{ inputs.version }}"
+            version="$DISPATCH_VERSION"
           else
             version="${GITHUB_REF_NAME#orbit-v}"
           fi
