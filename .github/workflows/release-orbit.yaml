@@ -26,12 +26,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release:
+    name: Create GitHub release
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Resolve version
+        id: meta
+        env:
+          # Expression-substituted before bash runs, so it must stay out of the
+          # script text: read it from the environment and validate before use.
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+          else
+            version="${GITHUB_REF_NAME#orbit-v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            echo "Invalid version: '$version'" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create release if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="orbit-v${{ steps.meta.outputs.version }}"
+          gh release view "$tag" >/dev/null 2>&1 || \
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+              --notes "Orbit release ${{ steps.meta.outputs.version }}"
+
   cli:
     name: CLI + web archive (linux x64)
     # Never let a Gitea Actions mirror try to run this file.
     if: github.server_url == 'https://github.com'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    needs: release
     permissions:
       contents: write
     steps:
@@ -149,9 +190,194 @@ jobs:
           set -euo pipefail
           version="${{ steps.meta.outputs.version }}"
           tag="orbit-v${version}"
-          gh release delete "$tag" --yes --cleanup-tag=false 2>/dev/null || true
-          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --notes "Orbit release ${version}"
+          # The release job already created the release; parallel sibling jobs
+          # upload their own assets, so never delete/recreate it here.
           gh release upload "$tag" --clobber \
             "release-cli/t3-${version}-linux-x64.tar.gz" \
             "release-cli/t3-${version}-linux-x64.tar.gz.sha256" \
             "release-cli/SHA256SUMS"
+
+  android:
+    name: Android APK (arm64)
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      # Manual checkout: see the cli job for why actions/checkout cannot be used.
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          node-version: "25.9.0"
+
+      - name: Setup vite-plus
+        run: |
+          corepack enable
+          # Pin comes from the pnpm catalog so the two cannot drift apart.
+          npm install -g "vite-plus@$(grep -oP '^ *vite-plus: *\K[0-9.]+' pnpm-workspace.yaml)"
+
+      - name: Install dependencies
+        run: vp install --filter=@t3tools/mobile...
+
+      # The ubuntu-24.04 runner image already ships JDK 17 (JAVA_HOME_17_X64)
+      # and the Android SDK, so no toolchain setup steps are needed.
+      - name: Prebuild native project
+        working-directory: apps/mobile
+        env:
+          CI: "1"
+        run: npx expo prebuild --platform android
+
+      # Release build: embeds the JS bundle so the app runs standalone. No
+      # signingConfig exists in the template, so this emits an unsigned APK
+      # that the next step signs with the Orbit upload key.
+      - name: Build unsigned release APK
+        working-directory: apps/mobile/android
+        env:
+          GRADLE_OPTS: "-Xmx4g -Dorg.gradle.daemon=false"
+          # arm64-only native build keeps the runner disk comfortable.
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          ./gradlew assembleRelease
+
+      - name: Sign APK
+        working-directory: apps/mobile/android
+        env:
+          ORBIT_ANDROID_KEYSTORE_B64: ${{ secrets.ORBIT_ANDROID_KEYSTORE_B64 }}
+          ORBIT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ORBIT_ANDROID_KEYSTORE_PASSWORD }}
+          ORBIT_ANDROID_KEY_ALIAS: ${{ secrets.ORBIT_ANDROID_KEY_ALIAS }}
+          ORBIT_ANDROID_KEY_PASSWORD: ${{ secrets.ORBIT_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ORBIT_ANDROID_KEYSTORE_B64" ]]; then
+            echo "Android signing secrets are missing. Run scripts/setup-android-signing.sh once." >&2
+            exit 1
+          fi
+          build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          unsigned="app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -f "$unsigned"
+          base64 -d <<<"$ORBIT_ANDROID_KEYSTORE_B64" > /tmp/orbit-release.jks
+          out="$GITHUB_WORKSPACE/release-android/t3-${VERSION}-android-arm64.apk"
+          mkdir -p "$(dirname "$out")"
+          "$build_tools/zipalign" -p -f 4 "$unsigned" /tmp/orbit-aligned.apk
+          "$build_tools/apksigner" sign \
+            --ks /tmp/orbit-release.jks \
+            --ks-key-alias "$ORBIT_ANDROID_KEY_ALIAS" \
+            --ks-pass env:ORBIT_ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ORBIT_ANDROID_KEY_PASSWORD \
+            --out "$out" /tmp/orbit-aligned.apk
+          "$build_tools/apksigner" verify "$out"
+          rm -f /tmp/orbit-release.jks /tmp/orbit-aligned.apk
+
+      - name: Upload APK
+        working-directory: release-android
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          apk="t3-${VERSION}-android-arm64.apk"
+          sha256sum "$apk" > "$apk.sha256"
+          gh release upload "orbit-v${VERSION}" --clobber "$apk" "$apk.sha256"
+
+  macos:
+    name: Desktop DMG (macOS arm64)
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    needs: release
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      # Manual checkout: see the cli job for why actions/checkout cannot be used.
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          node-version: "25.9.0"
+
+      - name: Setup vite-plus
+        run: |
+          corepack enable
+          # BSD grep on macOS has no -P; sed extracts the same catalog pin.
+          npm install -g "vite-plus@$(sed -n 's/^ *vite-plus: *\([0-9.]*\).*/\1/p' pnpm-workspace.yaml | head -1)"
+
+      - name: Setup Rust
+        # build:desktop compiles the resource-monitor crate; sysinfo 0.39
+        # needs rustc 1.95, newer than the runner image's default.
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Install dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Public configuration
+        # Public T3 Connect identifiers (Clerk publishable key, relay URL).
+        run: cp .env.example .env
+
+      # No Apple secrets are set, so the build is ad-hoc signed
+      # (T3CODE_DESKTOP_SIGNED defaults to false).
+      - name: Build desktop DMG
+        run: |
+          set -euo pipefail
+          node scripts/build-desktop-artifact.ts \
+            --platform mac --target dmg --arch arm64 \
+            --build-version "$VERSION" \
+            --output-dir release-desktop
+
+      - name: Verify and stage DMG
+        run: |
+          set -euo pipefail
+          dmg=$(ls release-desktop/*.dmg | head -1)
+          # Even without a Developer ID the app must carry an ad-hoc
+          # signature, or Apple Silicon refuses to launch it.
+          hdiutil attach -nobrowse -mountpoint /tmp/t3dmg "$dmg" >/dev/null
+          trap 'hdiutil detach /tmp/t3dmg >/dev/null 2>&1 || true' EXIT
+          codesign -dv /tmp/t3dmg/*.app
+          mkdir -p release-macos
+          cp "$dmg" "release-macos/t3-${VERSION}-macos-arm64.dmg"
+          cd release-macos
+          shasum -a 256 "t3-${VERSION}-macos-arm64.dmg" > "t3-${VERSION}-macos-arm64.dmg.sha256"
+
+      - name: Upload DMG
+        working-directory: release-macos
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dmg="t3-${VERSION}-macos-arm64.dmg"
+          gh release upload "orbit-v${VERSION}" --clobber "$dmg" "$dmg.sha256"
