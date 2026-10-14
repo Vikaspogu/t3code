@@ -1,0 +1,399 @@
+name: release-orbit
+
+# Orbit fork release pipeline. Publishes the CLI + web archive to GitHub
+# Releases on the Vikaspogu/t3code fork:
+#   - t3-<version>-linux-x64.tar.gz (+ .sha256 sidecar + SHA256SUMS)
+#
+# Trigger: push a tag like `orbit-v0.0.46-orbit.5` or run manually.
+# Desktop (macOS) and mobile (Android) jobs are added on top of this later.
+
+on:
+  push:
+    tags:
+      - "orbit-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (for example 0.0.46-orbit.5)"
+        required: true
+
+permissions:
+  contents: read
+
+# One release per tag: re-runs replace, never stack.
+concurrency:
+  group: orbit-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create GitHub release
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Resolve version
+        id: meta
+        env:
+          # Expression-substituted before bash runs, so it must stay out of the
+          # script text: read it from the environment and validate before use.
+          DISPATCH_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+          else
+            version="${GITHUB_REF_NAME#orbit-v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            echo "Invalid version: '$version'" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create release if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job: gh resolves the repo from this variable.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="orbit-v${{ steps.meta.outputs.version }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # A re-run must not ship assets built from this commit under a
+            # release (or tag) that still targets an older one: deleting the
+            # release also deletes the tag, and the recreate below re-points
+            # both at GITHUB_SHA.
+            target="$(gh release view "$tag" --json targetCommitish --jq .targetCommitish)"
+            if [[ "$target" != "$GITHUB_SHA" ]]; then
+              gh release delete "$tag" --yes --cleanup-tag
+              gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+                --notes "Orbit release ${{ steps.meta.outputs.version }}"
+            fi
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+              --notes "Orbit release ${{ steps.meta.outputs.version }}"
+          fi
+
+  cli:
+    name: CLI + web archive (linux x64)
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    needs: release
+    permissions:
+      contents: write
+    steps:
+      # Manual checkout: the vendored .repos tree has orphaned gitlinks that
+      # break actions/checkout's submodule handling even with submodules
+      # disabled (same workaround as upstream's desktop-macos-preview.yml).
+      # Anonymous fetch = no token on disk for the third-party build steps.
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          node-version: "25.9.0"
+
+      - name: Setup vite-plus
+        run: |
+          corepack enable
+          # Pin comes from the pnpm catalog so the two cannot drift apart.
+          npm install -g "vite-plus@$(grep -oP '^ *vite-plus: *\K[0-9.]+' pnpm-workspace.yaml)"
+
+      - name: Install dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Stamp release version
+        # The exe bakes apps/server/package.json's version into `t3 --version`;
+        # stamp it before building so installers can verify the archive.
+        run: |
+          node -e 'const fs=require("fs");const f="apps/server/package.json";const j=JSON.parse(fs.readFileSync(f));j.version="${{ needs.release.outputs.version }}";fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")'
+
+      - name: Build server dist
+        # Web client first: `cli.ts build` bundles apps/web/dist into the
+        # server package; build-exe then compiles dist-exe/t3 with bun.
+        run: |
+          vp run --filter @t3tools/web build
+          node apps/server/scripts/cli.ts build
+          node apps/server/scripts/cli.ts build-exe --target linux-x64
+
+      # Staging happens after "Build server dist": `vp pack` wipes
+      # apps/server/dist, so an earlier copy would be deleted before archiving.
+      - name: Build resource monitor
+        run: |
+          cargo build --release --locked --manifest-path native/resource-monitor/Cargo.toml
+          mkdir -p apps/server/dist/resource-monitor/linux-x64
+          cp native/resource-monitor/target/release/t3-resource-monitor \
+            apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
+
+      - name: Build CLI archive
+        run: |
+          node scripts/build-cli-archive.ts \
+            --platform linux --arch x64 \
+            --version "${{ needs.release.outputs.version }}"
+
+      - name: Verify archive
+        # Unpack and check the binary reports the release version (guards
+        # against shipping a stale-stamped build).
+        run: |
+          set -euo pipefail
+          version="${{ needs.release.outputs.version }}"
+          archive="release-cli/t3-${version}-linux-x64.tar.gz"
+          test -f "$archive"
+          mkdir -p /tmp/verify && tar -xzf "$archive" -C /tmp/verify
+          reported=$(/tmp/verify/t3-${version}-linux-x64/t3 --version)
+          [[ "$reported" == *"$version"* ]] || { echo "version mismatch: archive reports '$reported', expected '$version'"; exit 1; }
+
+      - name: Checksums
+        # Per-asset sidecar (install script) + combined SHA256SUMS (server
+        # self-update and SSH provisioning consumers in shared/cliRelease).
+        run: |
+          set -euo pipefail
+          version="${{ needs.release.outputs.version }}"
+          cd release-cli
+          sha256sum "t3-${version}-linux-x64.tar.gz" > "t3-${version}-linux-x64.tar.gz.sha256"
+          sha256sum "t3-${version}-linux-x64.tar.gz" > SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.release.outputs.version }}"
+          tag="orbit-v${version}"
+          # The release job already created the release; parallel sibling jobs
+          # upload their own assets, so never delete/recreate it here.
+          gh release upload "$tag" --clobber \
+            "release-cli/t3-${version}-linux-x64.tar.gz" \
+            "release-cli/t3-${version}-linux-x64.tar.gz.sha256" \
+            "release-cli/SHA256SUMS"
+
+  android:
+    name: Android APK (arm64)
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      # Manual checkout: see the cli job for why actions/checkout cannot be used.
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          node-version: "25.9.0"
+
+      - name: Setup vite-plus
+        run: |
+          corepack enable
+          # Pin comes from the pnpm catalog so the two cannot drift apart.
+          npm install -g "vite-plus@$(grep -oP '^ *vite-plus: *\K[0-9.]+' pnpm-workspace.yaml)"
+
+      - name: Install dependencies
+        run: vp install --filter=@t3tools/mobile...
+
+      # The ubuntu-24.04 runner image already ships JDK 17 (JAVA_HOME_17_X64)
+      # and the Android SDK, so no toolchain setup steps are needed.
+      - name: Prebuild native project
+        working-directory: apps/mobile
+        env:
+          CI: "1"
+        run: npx expo prebuild --platform android
+
+      # Release build: embeds the JS bundle so the app runs standalone. No
+      # signingConfig exists in the template, so this emits an unsigned APK
+      # that the next step signs with the Orbit upload key.
+      - name: Build unsigned release APK
+        working-directory: apps/mobile/android
+        env:
+          GRADLE_OPTS: "-Xmx4g -Dorg.gradle.daemon=false"
+          # arm64-only native build keeps the runner disk comfortable.
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          ./gradlew assembleRelease
+
+      - name: Sign APK
+        working-directory: apps/mobile/android
+        env:
+          ORBIT_ANDROID_KEYSTORE_B64: ${{ secrets.ORBIT_ANDROID_KEYSTORE_B64 }}
+          ORBIT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ORBIT_ANDROID_KEYSTORE_PASSWORD }}
+          ORBIT_ANDROID_KEY_ALIAS: ${{ secrets.ORBIT_ANDROID_KEY_ALIAS }}
+          ORBIT_ANDROID_KEY_PASSWORD: ${{ secrets.ORBIT_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077 # decoded keystore must not be readable by other jobs/users
+          trap 'rm -f /tmp/orbit-release.jks /tmp/orbit-aligned.apk' EXIT TERM
+          if [[ -z "$ORBIT_ANDROID_KEYSTORE_B64" || -z "$ORBIT_ANDROID_KEYSTORE_PASSWORD" || -z "$ORBIT_ANDROID_KEY_ALIAS" || -z "$ORBIT_ANDROID_KEY_PASSWORD" ]]; then
+            echo "One or more ORBIT_ANDROID_* secrets are missing. Run scripts/setup-android-signing.sh once." >&2
+            exit 1
+          fi
+          build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          # expo prebuild's template debug-signs release builds, so the output is
+          # app-release.apk; apksigner re-signs it with the release key below.
+          unsigned="app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$unsigned" ]]; then
+            echo "expected APK missing: $unsigned; actual outputs:" >&2
+            ls -R app/build/outputs/apk/ >&2 || true
+            exit 1
+          fi
+          base64 -d <<<"$ORBIT_ANDROID_KEYSTORE_B64" > /tmp/orbit-release.jks
+          out="$GITHUB_WORKSPACE/release-android/t3-${VERSION}-android-arm64.apk"
+          mkdir -p "$(dirname "$out")"
+          "$build_tools/zipalign" -p -f 4 "$unsigned" /tmp/orbit-aligned.apk
+          "$build_tools/apksigner" sign \
+            --ks /tmp/orbit-release.jks \
+            --ks-key-alias "$ORBIT_ANDROID_KEY_ALIAS" \
+            --ks-pass env:ORBIT_ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ORBIT_ANDROID_KEY_PASSWORD \
+            --out "$out" /tmp/orbit-aligned.apk
+          "$build_tools/apksigner" verify "$out"
+
+      - name: Upload APK
+        working-directory: release-android
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          apk="t3-${VERSION}-android-arm64.apk"
+          sha256sum "$apk" > "$apk.sha256"
+          gh release upload "orbit-v${VERSION}" --clobber "$apk" "$apk.sha256"
+
+  macos:
+    name: Desktop DMG (macOS arm64)
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    needs: release
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      # Manual checkout: see the cli job for why actions/checkout cannot be used.
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          node-version: "25.9.0"
+
+      - name: Setup vite-plus
+        run: |
+          corepack enable
+          # BSD grep on macOS has no -P; sed extracts the same catalog pin.
+          npm install -g "vite-plus@$(sed -n 's/^ *vite-plus: *\([0-9.]*\).*/\1/p' pnpm-workspace.yaml | head -1)"
+
+      - name: Setup Rust
+        # build:desktop compiles the resource-monitor crate; sysinfo 0.39
+        # needs rustc 1.95, newer than the runner image's default.
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Install dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Public configuration
+        # Public T3 Connect identifiers (Clerk publishable key, relay URL).
+        run: cp .env.example .env
+
+      # No Apple secrets are set, so the build is ad-hoc signed
+      # (T3CODE_DESKTOP_SIGNED defaults to false).
+      - name: Build desktop DMG
+        run: |
+          set -euo pipefail
+          node scripts/build-desktop-artifact.ts \
+            --platform mac --target dmg --arch arm64 \
+            --build-version "$VERSION" \
+            --output-dir release-desktop
+
+      - name: Verify and stage DMG
+        run: |
+          set -euo pipefail
+          dmg=$(ls release-desktop/*.dmg | head -1)
+          # Even without a Developer ID the app must carry an ad-hoc
+          # signature, or Apple Silicon refuses to launch it.
+          hdiutil attach -nobrowse -mountpoint /tmp/t3dmg "$dmg" >/dev/null
+          trap 'hdiutil detach /tmp/t3dmg >/dev/null 2>&1 || true' EXIT
+          codesign -dv /tmp/t3dmg/*.app
+          mkdir -p release-macos
+          cp "$dmg" "release-macos/t3-${VERSION}-macos-arm64.dmg"
+          # The updater zip and latest-mac.yml must keep their original
+          # electron-builder names: latest-mac.yml references the zip by
+          # name, so renaming either one breaks the update feed.
+          cp release-desktop/*.zip release-macos/
+          cp release-desktop/latest*.yml release-macos/ 2>/dev/null || true
+          cp release-desktop/*.blockmap release-macos/ 2>/dev/null || true
+          cd release-macos
+          shasum -a 256 "t3-${VERSION}-macos-arm64.dmg" > "t3-${VERSION}-macos-arm64.dmg.sha256"
+
+      - name: Upload DMG
+        working-directory: release-macos
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmg="t3-${VERSION}-macos-arm64.dmg"
+          # zip is what electron-updater actually downloads on macOS; it and
+          # the latest-mac.yml manifest keep their electron-builder names.
+          assets=("$dmg" "$dmg.sha256")
+          for f in *.zip *.yml *.blockmap; do
+            [[ "$f" == builder-debug.yml ]] && continue
+            assets+=("$f")
+          done
+          gh release upload "orbit-v${VERSION}" --clobber "${assets[@]}"
