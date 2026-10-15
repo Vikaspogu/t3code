@@ -6,6 +6,19 @@ name: release-orbit
 #
 # Trigger: push a tag like `orbit-v0.0.46-orbit.5` or run manually.
 # Desktop (macOS) and mobile (Android) jobs are added on top of this later.
+#
+# Selective builds: the `changes` job diffs the pushed commit against the
+# previous orbit-v* tag and skips each build job whose inputs did not
+# change. Dependency map that drives the filters (verified from the
+# workspace manifests):
+#   - packages/** feeds every build (mobile/web/server all import
+#     contracts, shared, client-runtime, provider-*).
+#   - apps/server and apps/web feed the CLI and the desktop DMG (the
+#     desktop app bundles the server runner and web client), but not
+#     the Android APK.
+#   - apps/mobile feeds only the APK; apps/desktop only the DMG.
+# A release published with a build skipped simply carries no new asset
+# for that surface; the previous release's asset is still current.
 
 on:
   push:
@@ -81,13 +94,79 @@ jobs:
               --notes "Orbit release ${{ steps.meta.outputs.version }}"
           fi
 
-  cli:
-    name: CLI + web archive (linux x64)
+  changes:
+    name: Detect changed build inputs
     # Never let a Gitea Actions mirror try to run this file.
     if: github.server_url == 'https://github.com'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      cli: ${{ steps.detect.outputs.cli }}
+      android: ${{ steps.detect.outputs.android }}
+      macos: ${{ steps.detect.outputs.macos }}
+    steps:
+      - name: Diff against previous orbit tag
+        id: detect
+        env:
+          HEAD_SHA: ${{ github.sha }}
+          # On a tag push this is the new tag; on workflow_dispatch it is
+          # the branch name and excludes nothing.
+          CURRENT_REF: ${{ github.ref_name }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+          git fetch --no-tags --depth=1 origin "+refs/tags/orbit-v*:refs/tags/orbit-v*"
+          prev=$(git tag --list 'orbit-v*' | grep -v "^${CURRENT_REF}$" | sort -V | tail -1) || true
+          build_all() {
+            echo "No previous orbit tag: building everything." >&2
+            echo "cli=true" >> "$GITHUB_OUTPUT"
+            echo "android=true" >> "$GITHUB_OUTPUT"
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+          }
+          if [[ -z "$prev" ]]; then
+            build_all
+            exit 0
+          fi
+          files=$(git diff --name-only "$prev" "$HEAD_SHA")
+          if [[ -z "$files" ]]; then
+            echo "No changes since $prev: skipping all builds." >&2
+            echo "cli=false" >> "$GITHUB_OUTPUT"
+            echo "android=false" >> "$GITHUB_OUTPUT"
+            echo "macos=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Changed since $prev:" >&2
+          sed 's/^/  /' <<<"$files" >&2
+          if grep -Eq '^(apps/(server|web)/|packages/|scripts/|native/)' <<<"$files"; then
+            echo "cli=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cli=false" >> "$GITHUB_OUTPUT"
+          fi
+          if grep -Eq '^(apps/mobile/|packages/)' <<<"$files"; then
+            echo "android=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "android=false" >> "$GITHUB_OUTPUT"
+          fi
+          if grep -Eq '^(apps/(server|web|desktop)/|packages/|scripts/|native/)' <<<"$files"; then
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "macos=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  cli:
+    name: CLI + web archive (linux x64)
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com' && needs.changes.outputs.cli == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
-    needs: release
+    needs:
+      - release
+      - changes
     permissions:
       contents: write
     steps:
@@ -195,8 +274,10 @@ jobs:
   android:
     name: Android APK (arm64)
     # Never let a Gitea Actions mirror try to run this file.
-    if: github.server_url == 'https://github.com'
-    needs: release
+    if: github.server_url == 'https://github.com' && needs.changes.outputs.android == 'true'
+    needs:
+      - release
+      - changes
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -303,8 +384,10 @@ jobs:
   macos:
     name: Desktop DMG (macOS arm64)
     # Never let a Gitea Actions mirror try to run this file.
-    if: github.server_url == 'https://github.com'
-    needs: release
+    if: github.server_url == 'https://github.com' && needs.changes.outputs.macos == 'true'
+    needs:
+      - release
+      - changes
     runs-on: macos-15
     timeout-minutes: 90
     permissions:
