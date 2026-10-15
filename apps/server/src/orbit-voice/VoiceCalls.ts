@@ -404,8 +404,8 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-        const commandId = CommandId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
-        const messageId = MessageId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
+        const commandId = CommandId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+        const messageId = MessageId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
         const call = yield* get(owner, input.callId);
         if (call.value.state !== "connected")
           return yield* new OrbitVoiceError({
