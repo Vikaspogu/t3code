@@ -1589,7 +1589,7 @@ function SavedBackendListRow({
   const subtitleText = [
     environmentTransportLabel(environment, connectedTarget),
     resumingServerUpdate ? "Restarting" : status.text,
-    enabled && versionMismatch ? serverVersion : null,
+    serverVersion,
   ]
     .filter((value): value is string => value !== null)
     .join(" · ");
