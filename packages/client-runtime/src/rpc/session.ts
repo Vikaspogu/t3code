@@ -23,9 +23,11 @@ import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
+import { httpRpcUrlFromSocketUrl } from "../connection/compatibility.ts";
 import type {
   ConnectionAttemptError,
   ConnectionTransientError,
@@ -60,6 +62,11 @@ export interface RpcSessionOptions {
   readonly usageLimitSources?: boolean;
   /** This client answers /usage-limits itself, so the server may advertise it. */
   readonly usageLimitsCommand?: boolean;
+  /**
+   * Speak the RPC protocol over the POST /rpc NDJSON endpoint instead of a
+   * WebSocket, for environments where the /ws upgrade never completes.
+   */
+  readonly transport?: "ws" | "http";
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -194,28 +201,50 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         Effect.asVoid,
       ),
     });
-    const layerSocket = Socket.layerWebSocket(connection.socketUrl, {
-      openTimeout: SOCKET_OPEN_TIMEOUT,
-    }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
-    const layerProtocol = Layer.effect(
-      RpcClient.Protocol,
-      RpcClient.makeProtocolSocket({
-        pingTimeout: PING_TIMEOUT,
-        retryTransientErrors: false,
-        retryPolicy: Schedule.recurs(0),
-        onPingTimeout: Ref.set(pingTimedOut, true),
-      }),
-    ).pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          layerSocket,
-          RpcSerialization.layerJson,
-          Layer.succeed(RpcClient.ConnectionHooks, hooks),
-        ),
-      ),
-    );
+    const useHttpTransport = options.transport === "http";
+    // HTTP fallback transport (Android Prisma): the /ws upgrade never
+    // completes there, but HTTPS POSTs stream fine, so speak the same
+    // protocol over the /rpc NDJSON endpoint instead of a socket. The URL
+    // reuses the prepared socket URL's host, auth, and metadata params.
+    // ponytail: bearer-auth HTTP sessions reuse one 5-minute wsTicket for
+    // every POST and break when it expires — the supported HTTP path is
+    // same-origin cookie auth, which re-authenticates per POST. Add ticket
+    // re-issue per POST if remote bearer clients ever need HTTP fallback.
+    const layerProtocol = useHttpTransport
+      ? RpcClient.layerProtocolHttp({ url: httpRpcUrlFromSocketUrl(connection.socketUrl) }).pipe(
+          Layer.provide(Layer.mergeAll(RpcSerialization.layerNdjson, FetchHttpClient.layer)),
+        )
+      : Layer.effect(
+          RpcClient.Protocol,
+          RpcClient.makeProtocolSocket({
+            pingTimeout: PING_TIMEOUT,
+            retryTransientErrors: false,
+            retryPolicy: Schedule.recurs(0),
+            onPingTimeout: Ref.set(pingTimedOut, true),
+          }),
+        ).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Socket.layerWebSocket(connection.socketUrl, {
+                openTimeout: SOCKET_OPEN_TIMEOUT,
+              }).pipe(
+                Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)),
+              ),
+              RpcSerialization.layerJson,
+              Layer.succeed(RpcClient.ConnectionHooks, hooks),
+            ),
+          ),
+        );
+    if (useHttpTransport) {
+      // No connect/disconnect lifecycle over HTTP — the session counts as
+      // connected once the protocol layer builds; `ready` still gates on
+      // initialConfig, which performs the first real (authenticated) POST.
+      yield* Deferred.succeed(connected, undefined);
+    }
     const protocolContext = yield* Layer.build(layerProtocol).pipe(
-      Effect.withSpan("environment.websocket.connect"),
+      Effect.withSpan(
+        useHttpTransport ? "environment.rpc-http.connect" : "environment.websocket.connect",
+      ),
     );
     const protocolClient = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
     const initialConfigDeferred = yield* Deferred.make<ServerConfig>();
