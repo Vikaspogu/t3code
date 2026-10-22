@@ -24,6 +24,8 @@ import * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
@@ -211,9 +213,17 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     // same-origin cookie auth, which re-authenticates per POST. Add ticket
     // re-issue per POST if remote bearer clients ever need HTTP fallback.
     const layerProtocol = useHttpTransport
-      ? RpcClient.layerProtocolHttp({ url: httpRpcUrlFromSocketUrl(connection.socketUrl) }).pipe(
-          Layer.provide(Layer.mergeAll(RpcSerialization.layerNdjson, FetchHttpClient.layer)),
-        )
+      ? RpcClient.layerProtocolHttp({
+          url: httpRpcUrlFromSocketUrl(connection.socketUrl),
+          // The HTTP protocol posts to `prependUrl(url)` with an empty
+          // request path, which normalizes to a trailing "/" and corrupts
+          // the last query param (e.g. orchestrationProtocol=2/). Strip
+          // trailing slashes before the request goes out.
+          transformClient: (client) =>
+            HttpClient.mapRequest(client, (request) =>
+              HttpClientRequest.updateUrl(request, (url) => url.replace(/\/+$/, "")),
+            ),
+        }).pipe(Layer.provide(Layer.mergeAll(RpcSerialization.layerNdjson, FetchHttpClient.layer)))
       : Layer.effect(
           RpcClient.Protocol,
           RpcClient.makeProtocolSocket({

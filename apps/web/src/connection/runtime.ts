@@ -14,6 +14,35 @@ import * as ConnectionPlatform from "./platform";
 
 const layerProvidedConnectionPlatform = ConnectionPlatform.layer.pipe(Layer.provide(Runtime.layer));
 
+function resolveRpcTransport(): "ws" | "http" {
+  // Manual override for WebSocket-blocked environments (Android Prisma):
+  // ?rpcTransport=http persists to localStorage so SPA navigation keeps it,
+  // and ?rpcTransport=ws resets the stored choice. Without either, the
+  // default WebSocket transport is used.
+  const requested = new URLSearchParams(window.location.search).get("rpcTransport");
+  if (requested === "http" || requested === "ws") {
+    localStorageSet("t3.rpcTransport", requested);
+  }
+  // Storage can be unavailable (DOM storage disabled in WebViews, private
+  // mode); the override is a convenience, so fall back to the default.
+  return localStorageGet("t3.rpcTransport") === "http" ? "http" : "ws";
+}
+
+function localStorageSet(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
+function localStorageGet(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
 const layerSnapshotLoader = Layer.mergeAll(
   BoundedThreadSnapshotLoader.layer,
   ShellSnapshotLoader.layer,
@@ -35,6 +64,7 @@ const layerProvidedClientConnection = layerSnapshotLoader.pipe(
       environmentThemes: true,
       usageLimitSources: true,
       usageLimitsCommand: true,
+      transport: resolveRpcTransport(),
     }),
   ),
   Layer.provideMerge(
