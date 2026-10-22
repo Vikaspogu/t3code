@@ -1191,6 +1191,24 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    setProviderSkillEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:provider:set-skill-enabled",
+      tag: WS_METHODS.providerSetSkillEnabled,
+      concurrency: {
+        mode: "singleFlight",
+        // Same-skill toggles dedupe while one is in flight (the UI also
+        // disables the row); cross-skill races are serialized by the
+        // server's settings write lock.
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.instanceId, input.cwd, input.name]),
+      },
+    }),
+    providerRuntimeInstructions: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:provider:runtime-instructions",
+      tag: WS_METHODS.providerGetRuntimeInstructions,
+      // Instruction text ships with the server build; no need to re-fetch often.
+      staleTimeMs: Infinity,
+    }),
     updateServer,
     upsertKeybinding: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:upsert-keybinding",

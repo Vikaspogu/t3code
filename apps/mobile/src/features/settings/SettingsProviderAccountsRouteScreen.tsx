@@ -4,7 +4,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import type { ProviderAuthResponse, ServerProvider } from "@t3tools/contracts";
-import { useRef, useState } from "react";
+import { useRef, useState, useMemo } from "react";
 import { Alert, Linking, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -189,6 +189,7 @@ function ProviderAccount({
                   ? "No in-app sign-in advertised. Follow the provider's docs to finish setup."
                   : "Connect this provider."}
         </Text>
+        <ProviderSkillsSummary provider={provider} />
         {signedIn && !active && provider.auth.email?.trim() ? (
           <ProviderAccountEmail key={provider.auth.email} email={provider.auth.email} />
         ) : null}
@@ -351,6 +352,47 @@ function ProviderAccount({
         />
       ) : null}
     </View>
+  );
+}
+
+/**
+ * Read-only skills visibility for one provider instance: counts from the most
+ * recently scanned workspace, tappable to list names. Toggling stays on web
+ * and desktop, which own provider configuration.
+ */
+function ProviderSkillsSummary({ provider }: { readonly provider: ServerProvider }) {
+  const [open, setOpen] = useState(false);
+  const skills = useMemo(() => {
+    const snapshots = [...(provider.workspaceSnapshots ?? [])].sort(
+      (a, b) => Date.parse(b.checkedAt) - Date.parse(a.checkedAt),
+    );
+    return snapshots[0]?.skills ?? provider.skills;
+  }, [provider.skills, provider.workspaceSnapshots]);
+  if (skills.length === 0) return null;
+  const disabledCount = skills.filter((skill) => !skill.enabled).length;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={open ? "Hide skills" : "Show skills"}
+      onPress={() => setOpen((value) => !value)}
+      className="min-h-[44px] justify-center"
+    >
+      <Text className="text-sm text-foreground-muted">
+        {skills.length} skills{disabledCount > 0 ? ` (${disabledCount} disabled)` : ""}
+        {open ? "" : " — tap to view"}
+      </Text>
+      {open
+        ? skills.map((skill) => (
+            <Text
+              key={`${skill.scope ?? ""}:${skill.name}`}
+              className="text-sm text-foreground-muted"
+            >
+              {skill.displayName ?? skill.name}
+              {skill.enabled ? "" : " (disabled)"}
+            </Text>
+          ))
+        : null}
+    </Pressable>
   );
 }
 

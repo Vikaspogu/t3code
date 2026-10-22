@@ -3,6 +3,7 @@ import { GitPreparePullRequestThreadInput } from "./git.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
@@ -16,6 +17,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.orbitVoiceSubmit]: AuthOrchestrationOperateScope,
   [WS_METHODS.orbitVoiceEnd]: AuthOrchestrationOperateScope,
   [WS_METHODS.orbitVoiceRenewPresence]: AuthOrchestrationOperateScope,
+  // Toggling a provider skill edits that provider's config, exactly like the
+  // provider settings it sits beside in the UI.
+  [WS_METHODS.providerSetSkillEnabled]: AuthProvidersManageScope,
   [WS_METHODS.orbitVoiceSnapshot]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   // Endpoint checks exist to configure exports, so they need the same grant as saving them.

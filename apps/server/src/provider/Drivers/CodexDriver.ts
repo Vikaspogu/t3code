@@ -307,6 +307,48 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
               ),
             );
 
+      const setSkillEnabled: NonNullable<ProviderInstance["setSkillEnabled"]> = ({
+        cwd,
+        name,
+        enabled,
+      }) =>
+        withCodexAppServerClient({
+          binaryPath: effectiveConfig.binaryPath,
+          homePath: effectiveConfig.homePath,
+          launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+          cwd,
+          environment: processEnv,
+        }).pipe(
+          Effect.flatMap(({ client }) =>
+            client.request("skills/config/write", {
+              enabled,
+              name,
+            }),
+          ),
+          Effect.scoped,
+          Effect.timeout("20 seconds"),
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail: `Failed to set Codex skill '${name}' for '${cwd}': ${String(cause)}`,
+                cause,
+              }),
+          ),
+          Effect.filterOrFail(
+            (response) => response.effectiveEnabled === enabled,
+            (response) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail: `Codex reports '${name}' as still ${response.effectiveEnabled ? "enabled" : "disabled"} after the change.`,
+              }),
+          ),
+          Effect.asVoid,
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+
       // Redemption spends something on the user's account. It serialises on
       // the account (instances sharing a Codex home share the credit), keeps
       // one idempotency key until Codex reports an outcome, and is bounded so
@@ -381,6 +423,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
         enabled,
         snapshot,
         snapshotForCwd,
+        setSkillEnabled,
         consumeResetCredit,
         orchestrationAdapter,
         textGeneration,

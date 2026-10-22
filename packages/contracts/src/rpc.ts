@@ -293,6 +293,10 @@ import {
   OtlpEndpointCheckInput,
   OtlpEndpointCheckResult,
   ServerConfig,
+  ServerProviderRuntimeInstructions,
+  ServerProviderRuntimeInstructionsInput,
+  ServerProviderSetSkillEnabledInput,
+  ServerProviderSkillError,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -406,6 +410,8 @@ export const WS_METHODS = {
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
+  providerSetSkillEnabled: "provider.setSkillEnabled",
+  providerGetRuntimeInstructions: "provider.getRuntimeInstructions",
   providerAuthStart: "provider.auth.start",
   providerConsumeResetCredit: "provider.consumeResetCredit",
   providerAuthComplete: "provider.auth.complete",
@@ -637,6 +643,18 @@ const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([ServerProviderUpdateError, EnvironmentAuthorizationError]),
+});
+
+const WsProviderSetSkillEnabledRpc = Rpc.make(WS_METHODS.providerSetSkillEnabled, {
+  payload: ServerProviderSetSkillEnabledInput,
+  success: ServerProviderUpdatedPayload,
+  error: Schema.Union([ServerProviderSkillError, EnvironmentAuthorizationError]),
+});
+
+const WsProviderGetRuntimeInstructionsRpc = Rpc.make(WS_METHODS.providerGetRuntimeInstructions, {
+  payload: ServerProviderRuntimeInstructionsInput,
+  success: ServerProviderRuntimeInstructions,
+  error: EnvironmentAuthorizationError,
 });
 
 const ProviderSetupRpcError = Schema.Union([ProviderSetupError, EnvironmentAuthorizationError]);
@@ -1883,6 +1901,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
+  WsProviderSetSkillEnabledRpc,
+  WsProviderGetRuntimeInstructionsRpc,
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,
   WsProviderAuthCompleteRpc,

@@ -90,6 +90,17 @@ export interface ProviderInstance {
   readonly snapshotForCwd?: (
     cwd: string,
   ) => Effect.Effect<ProviderWorkspaceSnapshot, ProviderDriverError>;
+  /**
+   * Toggle one discovered skill for a workspace. Only drivers whose CLI has a
+   * real toggle mechanism implement this (Codex app-server `skills/config/write`,
+   * Claude Code `skillOverrides`); for the rest the skill listing is read-only.
+   * Implementations verify the change took effect and fail otherwise.
+   */
+  readonly setSkillEnabled?: (input: {
+    readonly cwd: string;
+    readonly name: string;
+    readonly enabled: boolean;
+  }) => Effect.Effect<void, ProviderDriverError>;
   readonly refreshModels?: () => Effect.Effect<void, ProviderDriverError>;
   /** Invalidate T3-owned discovery caches before an explicit provider refresh. */
   readonly invalidateCaches?: Effect.Effect<void>;

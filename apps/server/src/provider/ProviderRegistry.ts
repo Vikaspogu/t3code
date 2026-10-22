@@ -109,14 +109,17 @@ export class ProviderRegistry extends Context.Service<
 
     /**
      * Fill the skills and slash commands snapshot for one cwd. A cwd that
-     * already has a snapshot is left alone unless `fresh` is set. A fresh scan
-     * also refreshes the instance's machine snapshot and drops other
-     * instances' snapshots for the cwd.
+     * already has a snapshot is left alone unless `fresh` or `rescan` is set.
+     * A fresh scan also refreshes the instance's machine snapshot and drops
+     * other instances' snapshots for the cwd. `rescan` re-reads this cwd's
+     * snapshot without the machine-level work — for cheap local state that a
+     * caller just changed (e.g. a skill toggle).
      */
     readonly refreshWorkspaceSnapshot: (input: {
       readonly instanceId: ProviderInstanceId;
       readonly cwd: string;
       readonly fresh?: boolean;
+      readonly rescan?: boolean;
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /**
@@ -523,7 +526,7 @@ export const layer = Layer.effect(
       cachedProviders.map((provider) => classifyCompatibility(provider, initialManifest)),
     );
     const workspaceRefreshesRef = yield* Ref.make<
-      ReadonlyMap<ProviderInstance, ReadonlySet<string>>
+      ReadonlyMap<ProviderInstance, ReadonlyMap<string, Deferred.Deferred<void>>>
     >(new Map());
     const maintenanceActionStatesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstanceId, { readonly update?: ServerProviderUpdateState | undefined }>
@@ -1041,6 +1044,7 @@ export const layer = Layer.effect(
       readonly instanceId: ProviderInstanceId;
       readonly cwd: string;
       readonly fresh?: boolean;
+      readonly rescan?: boolean;
     }) {
       // Fresh scans drop other instances' snapshots for this cwd first, so a
       // composer on one of them scans again on next use, even when this
@@ -1058,74 +1062,129 @@ export const layer = Layer.effect(
       const provider = providers.find((candidate) => candidate.instanceId === input.instanceId);
       const workspaceSnapshotOf = (candidate: ServerProvider | undefined) =>
         candidate?.workspaceSnapshots?.find((s) => s.cwd === input.cwd);
-      const scannedFrom = workspaceSnapshotOf(provider);
+      const cachedSnapshot = workspaceSnapshotOf(provider);
       const now = yield* DateTime.now;
       if (
         !provider ||
         !provider.enabled ||
         (!input.fresh &&
-          scannedFrom &&
-          !scannedFrom.slashCommandsPending &&
-          isProviderWorkspaceSnapshotCurrent(scannedFrom, DateTime.toEpochMillis(now)))
+          !input.rescan &&
+          cachedSnapshot &&
+          !cachedSnapshot.slashCommandsPending &&
+          isProviderWorkspaceSnapshotCurrent(cachedSnapshot, DateTime.toEpochMillis(now)))
       ) {
         return providers;
       }
-      // Drivers spread their machine snapshot, whose `checkedAt` is the last
-      // health check. The TTL needs the time this scan started reading files.
-      const scannedAt = DateTime.formatIso(now);
       const instance = yield* instanceRegistry.getInstance(input.instanceId);
       if (!instance?.snapshotForCwd) return providers;
-      const claimed = yield* Ref.modify(workspaceRefreshesRef, (refreshes) => {
-        const current = refreshes.get(instance);
-        if (current?.has(input.cwd)) return [false, refreshes] as const;
-        const next = new Map(refreshes);
-        next.set(instance, new Set(current).add(input.cwd));
-        return [true, next] as const;
-      });
-      // A fresh scan never joins a running one, which may predate the change.
-      if (!claimed && !input.fresh) return yield* Ref.get(providersRef);
-      // Fresh scans also re-read the machine snapshot after invalidating caches.
-      const refreshMachineSnapshot = input.fresh
-        ? (instance.invalidateCaches ?? Effect.void).pipe(
-            Effect.andThen(refreshInstance(input.instanceId)),
-          )
-        : Effect.void;
-      return yield* refreshMachineSnapshot.pipe(
-        Effect.andThen(instance.snapshotForCwd(input.cwd)),
-        Effect.flatMap((scopedSnapshot) =>
-          scopedSnapshot.status === "error" && scopedSnapshot.slashCommandsPending === undefined
-            ? Ref.get(providersRef)
-            : instanceRegistry.getInstance(input.instanceId).pipe(
-                Effect.flatMap((currentInstance) => {
-                  if (currentInstance !== instance) return Ref.get(providersRef);
-                  // Write only if the cwd's snapshot did not change during the
-                  // scan. A session event or another scan that landed first is newer.
-                  return updateProviders((currentProviders) =>
-                    currentProviders.map((candidate) =>
-                      candidate.instanceId === input.instanceId &&
-                      Equal.equals(workspaceSnapshotOf(candidate), scannedFrom)
-                        ? upsertProviderWorkspaceSnapshot(candidate, input.cwd, {
-                            ...scopedSnapshot,
-                            checkedAt: scannedAt,
-                          })
-                        : candidate,
-                    ),
-                  );
-                }),
-              ),
-        ),
-        Effect.ensuring(
-          claimed
-            ? Ref.update(workspaceRefreshesRef, (refreshes) => {
-                const next = new Map(refreshes);
-                const current = new Set(next.get(instance));
-                current.delete(input.cwd);
-                if (current.size) next.set(instance, current);
-                else next.delete(instance);
-                return next;
-              })
-            : Effect.void,
-        ),
+      const snapshotForCwd = instance.snapshotForCwd;
+      // Claims are per (instance, cwd): only one scan runs at a time. A fresh
+      // scan never joins a running one, which may predate the change that
+      // prompted it. A rescan waits for the running scan to finish and then
+      // scans again, so it reads state written after that scan started.
+      // acquireRelease makes claiming and registering the release atomic, so
+      // an interrupt cannot wedge the key with a claim nobody completes.
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          // One claim attempt per acquireRelease: the atomic claim and its
+          // release registration travel together, while the wait for an
+          // in-flight scan happens between attempts so it stays interruptible.
+          // The release closes over its own attempt, so a "running" attempt's
+          // finalizer is a no-op and only the owner removes the map entry.
+          const tryClaim = () =>
+            Effect.acquireRelease(
+              Effect.gen(function* () {
+                const [running, created] = yield* Ref.modify(
+                  workspaceRefreshesRef,
+                  (
+                    refreshes,
+                  ): readonly [
+                    readonly [
+                      Deferred.Deferred<void> | undefined,
+                      Deferred.Deferred<void> | undefined,
+                    ],
+                    ReadonlyMap<ProviderInstance, ReadonlyMap<string, Deferred.Deferred<void>>>,
+                  ] => {
+                    const current = refreshes.get(instance);
+                    const running = current?.get(input.cwd);
+                    if (running !== undefined) return [[running, undefined], refreshes] as const;
+                    const created = Deferred.makeUnsafe<void>();
+                    const next = new Map(refreshes);
+                    next.set(instance, new Map(current).set(input.cwd, created));
+                    return [[undefined, created], next] as const;
+                  },
+                );
+                if (running === undefined) {
+                  return {
+                    kind: "claimed" as const,
+                    mine: created as Deferred.Deferred<void>,
+                  };
+                }
+                if (!input.fresh && !input.rescan) return { kind: "joined" } as const;
+                if (input.fresh) return { kind: "alongside" } as const;
+                return { kind: "running", running } as const;
+              }),
+              (attempt) =>
+                attempt.kind === "claimed"
+                  ? Ref.update(workspaceRefreshesRef, (refreshes) => {
+                      const next = new Map(refreshes);
+                      const current = next.get(instance);
+                      if (current !== undefined && current.get(input.cwd) === attempt.mine) {
+                        const remaining = new Map(current);
+                        remaining.delete(input.cwd);
+                        if (remaining.size) next.set(instance, remaining);
+                        else next.delete(instance);
+                      }
+                      return next;
+                    }).pipe(Effect.andThen(Deferred.succeed(attempt.mine, void 0)))
+                  : Effect.void,
+            );
+          let claim = yield* tryClaim();
+          while (claim.kind === "running") {
+            yield* Deferred.await(claim.running);
+            claim = yield* tryClaim();
+          }
+          if (claim.kind === "joined") return yield* Ref.get(providersRef);
+          // A scan that waited re-reads what the awaited scan published, and
+          // every scan stamps the time it started reading files, not entry.
+          const scannedAt = DateTime.formatIso(yield* DateTime.now);
+          const scannedFrom = workspaceSnapshotOf(
+            (yield* Ref.get(providersRef)).find(
+              (candidate) => candidate.instanceId === input.instanceId,
+            ),
+          );
+          // Fresh scans also re-read the machine snapshot after invalidating caches.
+          const refreshMachineSnapshot = input.fresh
+            ? (instance.invalidateCaches ?? Effect.void).pipe(
+                Effect.andThen(refreshInstance(input.instanceId)),
+              )
+            : Effect.void;
+          return yield* refreshMachineSnapshot.pipe(
+            Effect.andThen(snapshotForCwd(input.cwd)),
+            Effect.flatMap((scopedSnapshot) =>
+              scopedSnapshot.status === "error" && scopedSnapshot.slashCommandsPending === undefined
+                ? Ref.get(providersRef)
+                : instanceRegistry.getInstance(input.instanceId).pipe(
+                    Effect.flatMap((currentInstance) => {
+                      if (currentInstance !== instance) return Ref.get(providersRef);
+                      // Write only if the cwd's snapshot did not change during the
+                      // scan. A session event or another scan that landed first is newer.
+                      return updateProviders((currentProviders) =>
+                        currentProviders.map((candidate) =>
+                          candidate.instanceId === input.instanceId &&
+                          Equal.equals(workspaceSnapshotOf(candidate), scannedFrom)
+                            ? upsertProviderWorkspaceSnapshot(candidate, input.cwd, {
+                                ...scopedSnapshot,
+                                checkedAt: scannedAt,
+                              })
+                            : candidate,
+                        ),
+                      );
+                    }),
+                  ),
+            ),
+          );
+        }),
       );
     });
 

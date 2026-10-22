@@ -55,6 +55,7 @@ import type {
 } from "@t3tools/provider-core/client";
 import { deriveProviderSettingsFields, ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
+import { ProviderSkillsSection } from "./ProviderSkillsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
@@ -1342,6 +1343,18 @@ export function ProviderInstanceCard({
               onModelOrderChange={onModelOrderChange}
             />
           </div>
+        </SettingsSection>
+      ) : null}
+
+      {driverKind !== null ? (
+        <SettingsSection title="Skills &amp; prompts">
+          <ProviderSkillsSection
+            environmentId={environmentId}
+            instanceId={instanceId}
+            driverKind={driverKind}
+            provider={liveProvider}
+            readOnly={readOnly}
+          />
         </SettingsSection>
       ) : null}
     </>

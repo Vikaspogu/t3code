@@ -15,15 +15,21 @@
  */
 
 import type { ClaudeSettings, ServerProviderSkill } from "@t3tools/contracts";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { fromLenientJson } from "@t3tools/shared/schemaJson";
+import { fromLenientJson, fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import { parse as parseYamlDocument } from "yaml";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as Semaphore from "effect/Semaphore";
+
+// Serializes settings-file writes across concurrent skill toggles.
+// ponytail: process-global lock; per-path locks if contention ever shows up.
+const claudeSettingsWriteLock = Semaphore.makeUnsafe(1);
 
 type ClaudeSkillScope = "user" | "project";
 
@@ -398,4 +404,151 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
   }
 
   return [...skillsByName.values()].sort((left, right) => left.name.localeCompare(right.name));
+});
+
+export class ClaudeSkillToggleError extends Data.TaggedError("ClaudeSkillToggleError")<{
+  readonly reason: string;
+}> {
+  override get message(): string {
+    return this.reason;
+  }
+}
+
+/** Whole-file parse: every top-level key survives the round trip we write back. */
+const ClaudeSettingsFile = fromLenientJson(Schema.Record(Schema.String, Schema.Unknown));
+const decodeClaudeSettingsFile = Schema.decodeUnknownEffect(ClaudeSettingsFile);
+/** 2-space pretty JSON, so hand-edited settings files stay readable after a write. */
+const encodeClaudeSettingsFile = Schema.encodeSync(
+  fromJsonStringPretty(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+/** Last settings file in the precedence chain that sets `skillOverrides[name]`. */
+const findSkillOverridePin = Effect.fn("findSkillOverridePin")(function* (
+  configDirPath: string,
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+  name: string,
+): Effect.fn.Return<string | undefined, never, FileSystem.FileSystem | Path.Path> {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const repositoryRoot = yield* findRepositoryRoot(cwd);
+  let pinnedBy: string | undefined;
+  for (const settingsPath of skillOverrideSettingsPaths(
+    path,
+    configDirPath,
+    cwd,
+    platform,
+    environment,
+    repositoryRoot,
+  )) {
+    const contents = yield* fileSystem
+      .readFileString(settingsPath)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (contents === undefined) continue;
+    const parsed = yield* decodeSkillOverrideSettings(contents).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (parsed?.skillOverrides && Object.hasOwn(parsed.skillOverrides, name)) {
+      pinnedBy = settingsPath;
+    }
+  }
+  return pinnedBy;
+});
+
+/**
+ * Toggle one discovered skill by writing a `skillOverrides` entry into the
+ * settings file that governs the skill's scope: the user's `settings.json`
+ * for user skills, the workspace's `.claude/settings.local.json` for project
+ * ones. Claude Code merges all of its settings files on every run, so the
+ * change applies from the next turn with no restart.
+ *
+ * After writing, the merged chain is re-read: when a higher-precedence file
+ * (repository root `settings.local.json`, or the administrator's managed
+ * policy) already decides this skill, the write is a lie and this fails,
+ * naming the file that wins.
+ */
+export const setClaudeSkillEnabled = Effect.fn("setClaudeSkillEnabled")(function* (
+  config: Pick<ClaudeSettings, "homePath">,
+  cwd: string,
+  name: string,
+  enabled: boolean,
+  environment?: NodeJS.ProcessEnv,
+): Effect.fn.Return<void, ClaudeSkillToggleError, FileSystem.FileSystem | Path.Path> {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const env = environment ?? process.env;
+  const configDirPath = yield* resolveClaudeConfigDirPath(config, env, cwd);
+
+  const skills = yield* discoverClaudeSkills(config, cwd, env);
+  const skill = skills.find((candidate) => candidate.name === name);
+  if (skill === undefined) {
+    return yield* new ClaudeSkillToggleError({
+      reason: `Skill '${name}' was not found in this workspace.`,
+    });
+  }
+
+  const settingsPath =
+    skill.scope === "user"
+      ? path.join(configDirPath, "settings.json")
+      : path.join(cwd, ".claude", "settings.local.json");
+
+  // Serialize the whole read-modify-write (plus the effective-state re-read)
+  // across concurrent toggles so two skills in the same settings file cannot
+  // clobber each other's entries.
+  // ponytail: process-global lock; per-path locks if contention ever shows up.
+  yield* Effect.gen(function* () {
+    const contents = yield* fileSystem
+      .readFileString(settingsPath)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    let parsed: Record<string, unknown> = {};
+    if (contents !== undefined) {
+      const decoded = yield* decodeClaudeSettingsFile(contents).pipe(
+        Effect.mapError(
+          () =>
+            new ClaudeSkillToggleError({
+              reason: `${settingsPath} is not valid JSON, so T3 Code will not rewrite it by hand. Fix or remove the file first.`,
+            }),
+        ),
+      );
+      parsed = decoded as Record<string, unknown>;
+    }
+
+    const overrides: Record<string, unknown> =
+      typeof parsed.skillOverrides === "object" && parsed.skillOverrides !== null
+        ? { ...(parsed.skillOverrides as Record<string, unknown>) }
+        : {};
+    overrides[name] = enabled ? "on" : "off";
+    parsed.skillOverrides = overrides;
+
+    yield* fileSystem.makeDirectory(path.dirname(settingsPath), { recursive: true }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ClaudeSkillToggleError({
+            reason: `Could not create ${path.dirname(settingsPath)}: ${cause}`,
+          }),
+      ),
+    );
+    // ponytail: this encode drops comments when a hand-edited file had them;
+    // rewrite as a JSON5-aware editor if users report losing annotations.
+    yield* fileSystem.writeFileString(settingsPath, `${encodeClaudeSettingsFile(parsed)}\n`).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ClaudeSkillToggleError({
+            reason: `Could not write ${settingsPath}: ${cause}`,
+          }),
+      ),
+    );
+
+    const effective = (yield* readSkillOverrides(configDirPath, cwd, env)).get(name);
+    if (effective?.enabled !== enabled) {
+      const pinnedBy = yield* findSkillOverridePin(configDirPath, cwd, env, name);
+      return yield* new ClaudeSkillToggleError({
+        reason:
+          pinnedBy === undefined
+            ? `Toggling '${name}' did not take effect.`
+            : `'${name}' is controlled by a higher-precedence settings file: ${pinnedBy}`,
+      });
+    }
+  }).pipe(claudeSettingsWriteLock.withPermits(1));
 });

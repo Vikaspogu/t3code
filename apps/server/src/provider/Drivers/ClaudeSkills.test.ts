@@ -5,7 +5,12 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { discoverClaudeSkills, skillOverrideSettingsPaths } from "./ClaudeSkills.ts";
+import {
+  ClaudeSkillToggleError,
+  discoverClaudeSkills,
+  setClaudeSkillEnabled,
+  skillOverrideSettingsPaths,
+} from "./ClaudeSkills.ts";
 
 const writeSkill = Effect.fn(function* (
   skillsDir: string,
@@ -736,6 +741,150 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
       );
 
       assert.deepEqual(skills, []);
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("setClaudeSkillEnabled", (it) => {
+  it.effect("writes a user-scope skill override and reports the effective state", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skill-toggle-" });
+      const configDir = path.join(tempDir, "claude-home");
+      yield* writeSkill(path.join(configDir, "skills"), "probe-alias", "# Body");
+
+      yield* setClaudeSkillEnabled({ homePath: configDir }, tempDir, "probe-alias", false);
+
+      const raw = yield* fs.readFileString(path.join(configDir, "settings.json"));
+      assert.include(raw, '"skillOverrides"');
+      assert.include(raw, '"probe-alias": "off"');
+
+      const skills = yield* discoverClaudeSkills({ homePath: configDir }, tempDir);
+      assert.deepEqual(
+        skills.map((skill) => [skill.name, skill.enabled]),
+        [["probe-alias", false]],
+      );
+
+      // Toggling back on clears the pin the same way.
+      yield* setClaudeSkillEnabled({ homePath: configDir }, tempDir, "probe-alias", true);
+      const backOn = yield* discoverClaudeSkills({ homePath: configDir }, tempDir);
+      assert.deepEqual(
+        backOn.map((skill) => skill.enabled),
+        [true],
+      );
+    }),
+  );
+
+  it.effect("writes a project-scope override into the workspace's settings.local.json", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skill-toggle-" });
+      const workspace = path.join(tempDir, "workspace");
+      yield* writeSkill(path.join(workspace, ".claude", "skills"), "project-skill", "# Body");
+
+      yield* setClaudeSkillEnabled(
+        { homePath: path.join(tempDir, "claude-home") },
+        workspace,
+        "project-skill",
+        false,
+      );
+
+      const raw = yield* fs.readFileString(path.join(workspace, ".claude", "settings.local.json"));
+      assert.include(raw, '"project-skill": "off"');
+    }),
+  );
+
+  it.effect("refuses to toggle a skill that is not in the workspace", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skill-toggle-" });
+
+      const failure = yield* setClaudeSkillEnabled(
+        { homePath: path.join(tempDir, "claude-home") },
+        tempDir,
+        "ghost",
+        false,
+      ).pipe(Effect.flip);
+
+      assert.instanceOf(failure, ClaudeSkillToggleError);
+      assert.include(failure.reason, "was not found");
+    }),
+  );
+
+  it.effect("surfaces a higher-precedence pin that defeats the write", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skill-toggle-" });
+      const configDir = path.join(tempDir, "claude-home");
+      yield* writeSkill(path.join(configDir, "skills"), "pinned", "# Body");
+      // The workspace's project-local file outranks the user settings file
+      // the toggle writes for a personal skill.
+      yield* fs.makeDirectory(path.join(tempDir, ".claude"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(tempDir, ".claude", "settings.local.json"),
+        '{ "skillOverrides": { "pinned": "off" } }',
+      );
+
+      const failure = yield* setClaudeSkillEnabled(
+        { homePath: configDir },
+        tempDir,
+        "pinned",
+        true,
+        { CLAUDE_CONFIG_DIR: configDir },
+      ).pipe(Effect.flip);
+
+      assert.instanceOf(failure, ClaudeSkillToggleError);
+      assert.include(failure.reason, "higher-precedence");
+      assert.include(failure.reason, "settings.local.json");
+    }),
+  );
+
+  it.effect("preserves sibling keys in an existing settings file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skill-toggle-" });
+      const configDir = path.join(tempDir, "claude-home");
+      yield* writeSkill(path.join(configDir, "skills"), "kept", "# Body");
+      yield* fs.writeFileString(
+        path.join(configDir, "settings.json"),
+        '{ "theme": "dark", "skillOverrides": { "other": "off" } }',
+      );
+
+      yield* setClaudeSkillEnabled({ homePath: configDir }, tempDir, "kept", false);
+
+      const raw = yield* fs.readFileString(path.join(configDir, "settings.json"));
+      const parsed = JSON.parse(raw);
+      assert.equal(parsed.theme, "dark");
+      assert.deepEqual(parsed.skillOverrides, { other: "off", kept: "off" });
+    }),
+  );
+
+  it.effect("serializes concurrent toggles of different skills in one settings file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skill-toggle-" });
+      const configDir = path.join(tempDir, "claude-home");
+      const skillsDir = path.join(configDir, "skills");
+      yield* writeSkill(skillsDir, "alpha", "# Alpha");
+      yield* writeSkill(skillsDir, "beta", "# Beta");
+
+      yield* Effect.all(
+        [
+          setClaudeSkillEnabled({ homePath: configDir }, tempDir, "alpha", false),
+          setClaudeSkillEnabled({ homePath: configDir }, tempDir, "beta", false),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      const raw = yield* fs.readFileString(path.join(configDir, "settings.json"));
+      const parsed = JSON.parse(raw);
+      assert.deepEqual(parsed.skillOverrides, { alpha: "off", beta: "off" });
     }),
   );
 });

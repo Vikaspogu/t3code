@@ -76,6 +76,7 @@ import {
   ProjectMutationError,
   ProviderUploadFeedbackError,
   ProviderSetupError,
+  ServerProviderSkillError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
@@ -164,6 +165,7 @@ import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
+import { providerRuntimeInstructionsForDriver } from "./provider/RuntimeInstructions.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -2333,6 +2335,50 @@ const layerWsRpc = (
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           providerMaintenanceRunner.updateProvider(input),
+        [WS_METHODS.providerSetSkillEnabled]: (input) =>
+          Effect.gen(function* () {
+            const instance = yield* providerInstances.getInstance(input.instanceId);
+            if (instance === undefined || instance.setSkillEnabled === undefined) {
+              return yield* new ServerProviderSkillError({
+                instanceId: input.instanceId,
+                reason:
+                  instance === undefined
+                    ? `Provider instance ${input.instanceId} was not found.`
+                    : "This provider does not support toggling skills.",
+              });
+            }
+            yield* instance
+              .setSkillEnabled({
+                cwd: input.cwd,
+                name: input.name,
+                enabled: input.enabled,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerProviderSkillError({
+                      instanceId: input.instanceId,
+                      reason: cause.detail,
+                    }),
+                ),
+              );
+            // Return the rescanned snapshot so clients see the new state
+            // without a separate refresh call. Codex resolves skills per
+            // workspace, so it needs a fresh probe of that cwd; other drivers
+            // re-read cheap local state instead of respawning their CLI.
+            const providers = yield* providerRegistry.refreshWorkspaceSnapshot({
+              instanceId: input.instanceId,
+              cwd: input.cwd,
+              // Codex resolves skills per workspace through its app-server, so
+              // it needs the full fresh path (machine probe included). Other
+              // drivers just re-read cheap local state that we changed here.
+              fresh: instance.driverKind === "codex",
+              rescan: instance.driverKind !== "codex",
+            });
+            return { providers };
+          }),
+        [WS_METHODS.providerGetRuntimeInstructions]: (input) =>
+          Effect.succeed(providerRuntimeInstructionsForDriver(input.driver)),
         [WS_METHODS.providerConsumeResetCredit]: (input) =>
           Effect.gen(function* () {
             if ("sourceId" in input) return yield* usageLimitSources.consumeResetCredit(input);

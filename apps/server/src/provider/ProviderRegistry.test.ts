@@ -1845,6 +1845,25 @@ it.layer(
             [newSkills],
           );
 
+          // `rescan` bypasses the TTL for cheap local state a caller just
+          // changed, without the machine-level refresh `fresh` performs.
+          const rescanSkills = [
+            ...newSkills,
+            { name: "rescanned", path: "/workspace/rescanned/SKILL.md", enabled: true },
+          ];
+          yield* Ref.set(scopedResult, { ...scopedProvider, skills: rescanSkills });
+          yield* registry.refreshWorkspaceSnapshot({
+            instanceId,
+            cwd: "/workspace",
+            rescan: true,
+          });
+          assert.strictEqual(yield* Ref.get(snapshotCalls), 6);
+          assert.strictEqual(yield* Ref.get(cacheInvalidations), 1);
+          assert.deepStrictEqual(
+            (yield* registry.getProviders)[0]?.workspaceSnapshots?.map((s) => s.skills),
+            [rescanSkills],
+          );
+
           // A slow fresh scan that read older files must not overwrite a
           // newer scan that finished first.
           const slowStarted = yield* Deferred.make<void>();
@@ -1870,6 +1889,37 @@ it.layer(
           assert.deepStrictEqual(
             (yield* registry.getProviders)[0]?.workspaceSnapshots?.map((s) => s.skills),
             [latestSkills],
+          );
+
+          // A rescan that arrives while another scan is in flight waits for
+          // it, then scans again so it sees state written mid-flight.
+          const gatedStarted = yield* Deferred.make<void>();
+          const releaseGated = yield* Deferred.make<void>();
+          yield* Ref.set(scanGate, { started: gatedStarted, release: releaseGated });
+          yield* Ref.set(scopedResult, scopedProvider);
+          const inFlightScan = yield* registry
+            .refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace", rescan: true })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(gatedStarted);
+          const midFlightSkills = [
+            ...newSkills,
+            { name: "midflight", path: "/workspace/midflight/SKILL.md", enabled: true },
+          ];
+          yield* Ref.set(scopedResult, { ...scopedProvider, skills: midFlightSkills });
+          const rescanAfterInFlight = yield* registry
+            .refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace", rescan: true })
+            .pipe(Effect.forkChild);
+          // Let the rescan reach the wait on the in-flight scan before
+          // releasing it, so it must re-read state the in-flight scan
+          // published while it was parked.
+          yield* Effect.yieldNow;
+          yield* Deferred.succeed(releaseGated, undefined);
+          yield* Fiber.join(inFlightScan);
+          yield* Fiber.join(rescanAfterInFlight);
+          assert.strictEqual(yield* Ref.get(snapshotCalls), 10);
+          assert.deepStrictEqual(
+            (yield* registry.getProviders)[0]?.workspaceSnapshots?.map((s) => s.skills),
+            [midFlightSkills],
           );
 
           yield* Ref.set(instancesRef, [rebuiltInstance]);

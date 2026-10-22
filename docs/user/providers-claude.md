@@ -76,6 +76,11 @@ can still be started by you. Invoke those one per message: Claude directly runs
 only the last named skill and may try to start earlier ones through its Skill
 tool, which refuses skills reserved for manual invocation.
 
+Settings → Providers → a Claude instance → **Skills & prompts** lists every
+skill the instance discovered for a workspace, and the switch next to each one
+turns it on or off by writing Claude's own `skillOverrides`. The change takes
+effect from the next turn, with no restart.
+
 ## OpenRouter
 
 Create a Claude instance with its own config directory, such as
