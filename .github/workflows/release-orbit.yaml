@@ -452,7 +452,9 @@ jobs:
           # signature, or Apple Silicon refuses to launch it.
           hdiutil attach -nobrowse -mountpoint /tmp/t3dmg "$dmg" >/dev/null
           trap 'hdiutil detach /tmp/t3dmg >/dev/null 2>&1 || true' EXIT
-          codesign -dv /tmp/t3dmg/*.app
+          # --verify --deep fails on the linker-only signature of an unsigned
+          # build, which Squirrel.Mac would reject at update time anyway.
+          codesign --verify --deep /tmp/t3dmg/*.app
           mkdir -p release-macos
           cp "$dmg" "release-macos/t3-${VERSION}-macos-arm64.dmg"
           # The updater zip and latest-mac.yml must keep their original

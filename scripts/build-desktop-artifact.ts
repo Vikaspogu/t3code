@@ -2851,7 +2851,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           role: "Viewer",
         },
       ],
-      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      // Without Apple credentials electron-builder skips signing entirely,
+      // leaving only the linker's embedded ad-hoc Mach-O signature. Squirrel.Mac
+      // then rejects updates with "code has no resources but signature
+      // indicates they must be present". Explicit "-" applies a real ad-hoc
+      // bundle signature (with built-in allow-jit/disable-library-validation
+      // entitlements) that ShipIt accepts.
+      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : { identity: "-" }),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
