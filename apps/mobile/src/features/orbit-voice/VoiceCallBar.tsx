@@ -2,7 +2,7 @@ import type { ProviderInstanceId, ScopedThreadRef } from "@t3tools/contracts";
 import { voiceCallStatus } from "@t3tools/client-runtime/voice";
 import { DateTime } from "effect";
 import { Pressable, View } from "react-native";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { ComposerToolbarButton } from "../../components/ComposerToolbar";
 import { cn } from "../../lib/cn";
 import { useVoiceCall } from "./useVoiceCall";

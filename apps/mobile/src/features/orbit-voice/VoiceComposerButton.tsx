@@ -2,7 +2,7 @@ import { useNavigation } from "@react-navigation/native";
 import type { ProviderInstanceId, ScopedThreadRef } from "@t3tools/contracts";
 import { voiceCallStatus } from "@t3tools/client-runtime/voice";
 import { Pressable, View } from "react-native";
-import { SymbolView } from "../../components/AppSymbol";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { useVoiceCall } from "./useVoiceCall";
 
 /** Composer toolbar mic button. Hidden unless voice can start on this thread (Codex/Pi + permissions). */

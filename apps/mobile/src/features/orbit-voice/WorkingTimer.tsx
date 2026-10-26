@@ -1,6 +1,6 @@
 import { formatCallClock, formatWorkingTimerNow } from "@t3tools/shared/orchestrationTiming";
 import { useEffect, useState } from "react";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 
 /** Ticking elapsed-time label, mirroring the web chat WorkingTimer. */
 export function WorkingTimer({
