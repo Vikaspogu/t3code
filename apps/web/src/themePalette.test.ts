@@ -565,6 +565,54 @@ describe("theme files", () => {
     expect(themeAllowsSidebarArtwork("my-custom-theme")).toBe(false);
   });
 
+  it("keeps every built-in theme readable", () => {
+    for (const theme of BUILT_IN_THEMES) {
+      for (const mode of ["light", "dark"] as const) {
+        const colors = getThemeColorsForMode(theme, mode);
+        expect(colors).not.toBeNull();
+        expect(contrastRatio(colors!.text, colors!.canvas)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(colors!.textMuted, colors!.canvas)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(colors!.accentForeground, colors!.accent)).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(colors!.secondaryForeground, colors!.secondary),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(colors!.mutedForeground, colors!.muted)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(colors!.placeholder, colors!.surfaceRaised)).toBeGreaterThanOrEqual(
+          4.5,
+        );
+        expect(contrastRatio(colors!.sidebarForeground, colors!.sidebar)).toBeGreaterThanOrEqual(
+          4.5,
+        );
+        expect(
+          contrastRatio(colors!.messageForeground, colors!.messageSurface),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(colors!.messageActionForeground, colors!.messageAction),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(colors!.messageActionForeground, colors!.messageActionHover),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(colors!.toolbarControlForeground, colors!.toolbarControl),
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("keeps the studio theme surfaces visually distinct", () => {
+    const studioIds = new Set(["slate", "zinc", "stone"]);
+    for (const theme of BUILT_IN_THEMES.filter((definition) => studioIds.has(definition.id))) {
+      expect(getThemeModes(theme)).toEqual(["light", "dark"]);
+      for (const mode of ["light", "dark"] as const) {
+        const colors = getThemeColorsForMode(theme, mode)!;
+        expect(colors.surfaceRaised).not.toBe(colors.canvas);
+        expect(colors.sidebarControlSurface).not.toBe(colors.sidebar);
+        expect(colors.sidebarRowActive).not.toBe(colors.sidebar);
+        expect(colors.sidebarRowSelected).not.toBe(colors.sidebar);
+      }
+    }
+  });
+
   it("rejects a variant that repeats the base appearance", () => {
     expect(() =>
       parseThemeFile({
