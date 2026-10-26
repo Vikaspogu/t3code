@@ -1,10 +1,10 @@
 import { useIsFocused } from "@react-navigation/native";
 import { videoMimeType } from "@t3tools/shared/video";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { Keyboard, Modal, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppActivityIndicator } from "./AppActivityIndicator";
+import { AppActivityIndicator } from "./ui/AppActivityIndicator";
 import { loadLocalAttachmentPreview } from "../lib/localAttachmentPreview";
 import { useMediaActions } from "../state/mediaActions";
 import { type MediaActionsSource } from "../lib/mediaActionsSource";
@@ -17,8 +17,8 @@ import {
 } from "../lib/videoPreviewSource";
 import { useAssetUrlState, useRefreshAssetUrl } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
-import { AppText } from "./AppText";
-import { SymbolView } from "./AppSymbol";
+import { AppText } from "./ui/AppText";
+import { SymbolView } from "./ui/AppSymbol";
 import { MediaActionsMenu } from "./MediaActionsMenu";
 import { MediaSourceCaption } from "./MediaSourceCaption";
 import { MediaVideoPlayer } from "./MediaVideoPlayer";
@@ -58,16 +58,17 @@ function useLocalPlayback(source: LocalVideoPreviewSource): PlaybackState {
   const { attachment } = source;
   const [uri, setUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Only a different file needs a new lease; a metadata update on the same
-  // draft must not dispose the file Android is still playing.
-  const attachmentRef = useRef(attachment);
-  attachmentRef.current = attachment;
+  // Keep the file lease across metadata updates while Android is playing it.
+  const loadAttachment = useEffectEvent((signal: AbortSignal) =>
+    loadLocalAttachmentPreview(attachment, signal),
+  );
   const { id: attachmentId, fileUri } = attachment;
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- A new attachment clears the previous attachment's result before loading.
     setUri(null);
     setError(null);
     const controller = new AbortController();
-    const loading = loadLocalAttachmentPreview(attachmentRef.current, controller.signal);
+    const loading = loadAttachment(controller.signal);
     void loading.then(
       (file) => {
         if (file === null) return;
@@ -87,6 +88,7 @@ function useLocalPlayback(source: LocalVideoPreviewSource): PlaybackState {
         () => undefined,
       );
     };
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A different attachment restarts the load even when it resolves to the same cached file URI.
   }, [attachmentId, fileUri]);
   const mimeType = videoMimeType(attachment) ?? attachment.mimeType;
   return {
@@ -208,9 +210,10 @@ export function VideoPreviewModal(props: {
 }) {
   const isFocused = useIsFocused();
   const hasSource = props.source !== null;
+  const { onRequestClose } = props;
   useEffect(() => {
-    if (!isFocused && hasSource) props.onRequestClose();
-  }, [isFocused, hasSource, props.onRequestClose]);
+    if (!isFocused && hasSource) onRequestClose();
+  }, [isFocused, hasSource, onRequestClose]);
   const { source } = props;
   if (source === null || !isFocused) return null;
   return source.type === "local" ? (

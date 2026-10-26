@@ -2,13 +2,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  customThemeNames,
-  getGeneratedUniwindThemeOutputs,
-  renderDefaultThemeVariablesJSON,
-  renderUniwindThemesCSS,
-} from "./generate-uniwind-themes.mts";
-import { readDefaultMobileThemeVariables } from "../src/lib/mobileTheme.test-support";
+import { customThemeNames, renderUniwindThemesCSS } from "./generate-uniwind-themes.mts";
 
 describe("generate mobile Uniwind themes", () => {
   it("keeps the committed outputs current", () => {

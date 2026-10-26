@@ -1,12 +1,22 @@
+import * as Dialog from "./ui/Dialog";
 import { useIsFocused } from "@react-navigation/native";
 import { requireNativeModule } from "expo";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { AsyncResult } from "effect/reactivity";
 import { useEffect, useEffectEvent, useId, useState } from "react";
-import { Alert, Keyboard } from "react-native";
+import { Keyboard } from "react-native";
 
 import { loadLocalAttachmentPreview } from "../lib/localAttachmentPreview";
+import { fullscreenVideoClosed, fullscreenVideoOpened } from "../lib/videoAudioSession";
 import { mediaVideoPreviewUri, type VideoPreviewSource } from "../lib/videoPreviewSource";
 import { useAssetUrlState, useRefreshAssetUrl } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
+import {
+  acquireAudioSession,
+  activateAudioSession,
+  isAudioSessionOwner,
+  releaseAudioSession,
+} from "../lib/audioSession";
 
 export type { VideoPreviewSource } from "../lib/videoPreviewSource";
 
@@ -18,6 +28,10 @@ const NativeControls = requireNativeModule<{
     identifier: string,
   ): Promise<void>;
   dismissVideo(identifier: string): Promise<void>;
+  addListener(
+    event: "videoPlaybackChange",
+    listener: (event: { identifier: string; isPlaying: boolean }) => void,
+  ): { remove(): void };
 }>("T3NativeControls");
 
 function NativeVideoPreview(props: {
@@ -52,17 +66,45 @@ function NativeVideoPreview(props: {
 
   useEffect(() => Keyboard.dismiss(), []);
   useEffect(() => {
+    fullscreenVideoOpened();
+    return () => fullscreenVideoClosed();
+  }, []);
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- The native player latches the first resolved URL to keep its playback session.
     if (playbackUrl === null && resolvedUrl !== null) setPlaybackUrl(resolvedUrl);
   }, [playbackUrl, resolvedUrl]);
   useEffect(() => {
     if (!loadError) return;
-    Alert.alert("Could not open video", loadError);
+    Dialog.alert("Could not open video", loadError);
     onRequestClose();
   }, [loadError]);
 
   useEffect(() => {
     if (localAttachment === null && playbackUrl === null) return;
     const controller = new AbortController();
+    let token: ReturnType<typeof acquireAudioSession> | null = null;
+    const release = () => {
+      if (token) void releaseAudioSession(token).catch(() => {});
+      token = null;
+    };
+    const acquire = () => {
+      const next = acquireAudioSession("playback", () => {
+        release();
+        void NativeControls.dismissVideo(identifier).catch(() => {});
+      });
+      if (!isAudioSessionOwner(next)) {
+        void NativeControls.dismissVideo(identifier).catch(() => {});
+        return null;
+      }
+      token = next;
+      return next;
+    };
+    const subscription = NativeControls.addListener("videoPlaybackChange", (event) => {
+      if (event.identifier !== identifier || controller.signal.aborted) return;
+      if (event.isPlaying) {
+        if (!token) acquire();
+      } else release();
+    });
     let ready = false;
     void (async () => {
       const file =
@@ -70,25 +112,37 @@ function NativeVideoPreview(props: {
           ? await loadLocalAttachmentPreview(localAttachment, controller.signal)
           : null;
       if (localAttachment !== null && !file) return;
-      try {
-        if (controller.signal.aborted) return;
-        ready = true;
-        await NativeControls.presentVideo(
+      if (controller.signal.aborted) {
+        file?.dispose();
+        return;
+      }
+      const current = acquire();
+      if (!current || !(await activateAudioSession(current, true)) || controller.signal.aborted) {
+        release();
+        file?.dispose();
+        if (!controller.signal.aborted) onRequestClose();
+        return;
+      }
+      ready = true;
+      const presented = await settlePromise(() =>
+        NativeControls.presentVideo(
           file?.uri ?? playbackUrl!,
           name,
           source.sourceIdentifier ?? "",
           identifier,
-        );
-        if (!controller.signal.aborted) onRequestClose();
-      } finally {
-        // Native completion follows dismissal, so local playback keeps its file lease.
-        file?.dispose();
-      }
+        ),
+      );
+      // Native completion follows dismissal, so local playback keeps its file lease.
+      file?.dispose();
+      release();
+      if (AsyncResult.isFailure(presented)) throw squashAtomCommandFailure(presented);
+      if (!controller.signal.aborted) onRequestClose();
     })().catch((error: unknown) => {
+      release();
       if (controller.signal.aborted) return;
       // AVKit gives no retry, so re-mint now; the cached URL may simply have expired.
       if (ready) void refreshAssetUrl();
-      Alert.alert(
+      Dialog.alert(
         "Could not open video",
         ready
           ? "This video couldn't be loaded or played. Check the connection, or touch and hold the video to save or share the original."
@@ -100,6 +154,8 @@ function NativeVideoPreview(props: {
     });
     return () => {
       controller.abort();
+      subscription.remove();
+      release();
       void NativeControls.dismissVideo(identifier).catch(() => undefined);
     };
   }, [localAttachment, name, source.sourceIdentifier, playbackUrl, identifier]);

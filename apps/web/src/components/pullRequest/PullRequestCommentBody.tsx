@@ -5,7 +5,6 @@ import { Button } from "../ui/button";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { observeResize } from "~/lib/observeResize";
 
-/** Keep the complete markdown intact while limiting long reports to a readable preview. */
 export function PullRequestCommentBody({
   className,
   ...props
@@ -18,9 +17,9 @@ export function PullRequestCommentBody({
   useEffect(() => {
     const element = content.current;
     if (!element) return;
-    const measure = () => setOverflowing(element.getBoundingClientRect().height > 240);
-    measure();
-    return observeResize(element, measure);
+    return observeResize(element, ([entry]) => {
+      if (entry) setOverflowing(entry.contentRect.height > 240);
+    });
   }, []);
 
   return (

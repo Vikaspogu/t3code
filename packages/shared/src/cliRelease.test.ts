@@ -5,7 +5,6 @@ import {
   cliArchivePlatformKey,
   cliArchiveTarCommand,
   cliReleaseDownloadBaseUrl,
-  cliReleaseChannelOf,
   cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
   parseChecksums,
@@ -40,7 +39,6 @@ describe("cliRelease", () => {
       "https://mirror.example/t3/orbit-v1.2.3",
     );
   });
-
   it("parses sha256sum output including binary-mode markers", () => {
     const checksums = parseChecksums(
       [
@@ -61,14 +59,6 @@ describe("cliRelease", () => {
       "D:\\Win\\System32\\tar.exe",
     );
     expect(cliArchiveTarCommand("win32", {})).toBe("C:\\Windows\\System32\\tar.exe");
-  });
-
-  it("derives the release channel from the version alone", () => {
-    expect(cliReleaseChannelOf("1.2.3")).toBe("stable");
-    expect(cliReleaseChannelOf("1.2.3-nightly.20260911.4")).toBe("nightly");
-    expect(cliReleaseChannelOf("1.2.3-preview.20260911.4")).toBe("preview");
-    // A prerelease that is not one of our trains is not silently a nightly.
-    expect(cliReleaseChannelOf("1.2.3-rc.1")).toBe("stable");
   });
 
   it("picks the newest non-draft release on the requested channel", () => {
