@@ -69,7 +69,7 @@ describe("GitCafeCredentials", () => {
           process: {
             run: (input) => {
               calls.push(input);
-              return Effect.succeed(processOutput("password=gct_staging\n"));
+              return Effect.succeed(processOutput("password=example_staging\n"));
             },
           },
         }),
@@ -89,7 +89,7 @@ describe("GitCafeCredentials", () => {
       assert.deepStrictEqual(yield* credentials.cliEnv("staging.git.cafe"), {});
       assert.strictEqual(
         Redacted.value((yield* credentials.get("staging.git.cafe")).token),
-        "gct_staging",
+        "example_staging",
       );
 
       yield* settings.update({ sourceControlHosts: { gitcafe: { token: "" } } });
@@ -100,13 +100,15 @@ describe("GitCafeCredentials", () => {
   it.effect("asks cafe's Git credential helper over stdin and reuses the token", () => {
     const { layer, calls } = harness(() =>
       Effect.succeed(
-        processOutput("protocol=https\nhost=staging.git.cafe\nusername=alice\npassword=gct_1\n"),
+        processOutput(
+          "protocol=https\nhost=staging.git.cafe\nusername=alice\npassword=example_1\n",
+        ),
       ),
     );
     return Effect.gen(function* () {
       const credentials = yield* GitCafeCredentials.GitCafeCredentials;
       const credential = yield* credentials.get("Staging.Git.Cafe");
-      assert.strictEqual(Redacted.value(credential.token), "gct_1");
+      assert.strictEqual(Redacted.value(credential.token), "example_1");
       assert.strictEqual(credential.source, "cafe");
       yield* credentials.get("staging.git.cafe");
       assert.strictEqual(calls.length, 1);

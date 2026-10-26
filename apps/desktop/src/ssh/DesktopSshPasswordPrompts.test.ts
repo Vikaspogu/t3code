@@ -138,8 +138,8 @@ describe("DesktopSshPasswordPrompts", () => {
       assert.equal(testWindow.isRestored(), true);
       assert.equal(testWindow.isFocused(), true);
 
-      yield* prompts.resolve({ requestId: request.requestId, password: "secret" });
-      assert.equal(yield* Fiber.join(fiber), "secret");
+      yield* prompts.resolve({ requestId: request.requestId, password: "example-password" });
+      assert.equal(yield* Fiber.join(fiber), "example-password");
     }).pipe(Effect.provide(layer(testWindow.window)), Effect.scoped);
   });
 
@@ -163,10 +163,10 @@ describe("DesktopSshPasswordPrompts", () => {
       const sent = testWindow.sentMessages[0];
       assert.ok(sent);
       const request = sent.args[0] as { readonly requestId: string };
-      yield* prompts.resolve({ requestId: request.requestId, password: "secret" });
+      yield* prompts.resolve({ requestId: request.requestId, password: "example-password" });
       const password = yield* Fiber.join(requestFiber);
 
-      assert.equal(password, "secret");
+      assert.equal(password, "example-password");
       assert.equal(testWindow.isFocused(), false);
       assert.equal(testWindow.closedListenerCount(), 0);
     }).pipe(Effect.provide(layer(testWindow.window)), Effect.scoped);
