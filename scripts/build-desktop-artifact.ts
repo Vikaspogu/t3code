@@ -184,6 +184,7 @@ interface BuildCliInput {
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
+  readonly orbitSelfSigned: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
@@ -946,6 +947,7 @@ interface ResolvedBuildOptions {
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
   readonly signed: boolean;
+  readonly orbitSelfSigned: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
@@ -1639,6 +1641,7 @@ const BuildEnvConfig = Config.all({
   skipBuild: Config.Boolean("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
   keepStage: Config.Boolean("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
   signed: Config.Boolean("T3CODE_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
+  orbitSelfSigned: Config.Boolean("T3_ORBIT_SELF_SIGNED").pipe(Config.withDefault(false)),
   verbose: Config.Boolean("T3CODE_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
   mockUpdates: Config.Boolean("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
   mockUpdateServerPort: Config.String("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
@@ -1719,6 +1722,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
   const signed = resolveBooleanFlag(input.signed, env.signed);
+  const orbitSelfSigned = resolveBooleanFlag(input.orbitSelfSigned, env.orbitSelfSigned);
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
 
   const mockUpdates = resolveBooleanFlag(input.mockUpdates, env.mockUpdates);
@@ -1745,6 +1749,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     skipBuild,
     keepStage,
     signed,
+    orbitSelfSigned,
     verbose,
     mockUpdates,
     mockUpdateServerPort,
@@ -2759,6 +2764,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   target: string,
   version: string,
   signed: boolean,
+  orbitSelfSigned: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: number | undefined,
   macPasskeySigning:
@@ -2861,7 +2867,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // indicates they must be present". Explicit "-" applies a real ad-hoc
       // bundle signature (with built-in allow-jit/disable-library-validation
       // entitlements) that ShipIt accepts.
-      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : { identity: "-" }),
+      ...(signed || orbitSelfSigned
+        ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") }
+        : { identity: "-" }),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -3841,6 +3849,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       options.target,
       appVersion,
       options.signed,
+      options.orbitSelfSigned,
       options.mockUpdates,
       options.mockUpdateServerPort,
       macPasskeySigning && macEntitlementsPath
@@ -3945,12 +3954,15 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     delete buildEnv.CSC_KEY_PASSWORD;
   }
   if (!options.signed) {
-    buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
-    delete buildEnv.CSC_LINK;
-    delete buildEnv.CSC_KEY_PASSWORD;
+    // Notarization credentials never apply to self-signed fork builds.
     delete buildEnv.APPLE_API_KEY;
     delete buildEnv.APPLE_API_KEY_ID;
     delete buildEnv.APPLE_API_ISSUER;
+  }
+  if (!options.signed && !options.orbitSelfSigned) {
+    buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+    delete buildEnv.CSC_LINK;
+    delete buildEnv.CSC_KEY_PASSWORD;
   }
 
   if (hostPlatform === "win32") {
@@ -4090,6 +4102,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   keepStage: Flag.Boolean("keep-stage").pipe(
     Flag.withDescription("Keep temporary staging files (env: T3CODE_DESKTOP_KEEP_STAGE)."),
+    Flag.optional,
+  ),
+  orbitSelfSigned: Flag.Boolean("orbit-self-signed").pipe(
+    Flag.withDescription(
+      "Sign macOS builds with a self-signed identity (env: T3_ORBIT_SELF_SIGNED).",
+    ),
     Flag.optional,
   ),
   signed: Flag.Boolean("signed").pipe(

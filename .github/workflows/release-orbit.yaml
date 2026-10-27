@@ -357,11 +357,20 @@ jobs:
         # Public T3 Connect identifiers (Clerk publishable key, relay URL).
         run: cp .env.example .env
 
-      # No Apple secrets are set, so the build is ad-hoc signed
-      # (T3CODE_DESKTOP_SIGNED defaults to false).
+      # Self-signed code-signing identity: T3_ORBIT_SELF_SIGNED routes the build
+      # through the CSC_LINK/CSC_NAME keychain identity instead of ad-hoc signing.
       - name: Build desktop DMG
+        env:
+          T3_ORBIT_SELF_SIGNED: "true"
+          CSC_NAME: "Developer ID Application: T3 Orbit (Self-Signed)"
+          CSC_LINK: ${{ secrets.T3_ORBIT_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.T3_ORBIT_CSC_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::T3_ORBIT_CSC_LINK / T3_ORBIT_CSC_KEY_PASSWORD secrets are not set"
+            exit 1
+          fi
           node scripts/build-desktop-artifact.ts \
             --platform mac --target dmg --arch arm64 \
             --build-version "$VERSION" \
@@ -378,6 +387,9 @@ jobs:
           # --verify --deep fails on the linker-only signature of an unsigned
           # build, which Squirrel.Mac would reject at update time anyway.
           codesign --verify --deep /tmp/t3dmg/*.app
+          # Fail closed: an ad-hoc or wrong-authority build would break
+          # Squirrel.Mac updates for cert-signed installs.
+          codesign -dv --verbose=4 /tmp/t3dmg/*.app 2>&1 | grep -q "Authority=Developer ID Application: T3 Orbit (Self-Signed)"
           mkdir -p release-macos
           cp "$dmg" "release-macos/t3-${VERSION}-macos-arm64.dmg"
           # The updater zip and latest-mac.yml must keep their original

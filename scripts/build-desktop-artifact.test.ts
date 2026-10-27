@@ -481,6 +481,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "0.0.33-pr.8182.1",
         false,
         false,
+        false,
         undefined,
         undefined,
       );
@@ -488,6 +489,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "mac",
         "dmg",
         "0.0.33",
+        false,
         false,
         false,
         undefined,
@@ -498,6 +500,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "mac",
         "dmg",
         "0.0.41-preview.20260912.1589",
+        false,
         false,
         false,
         undefined,
@@ -1488,7 +1491,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it.effect("signs Windows builds with signtool on Windows and the jsign hook elsewhere", () =>
     Effect.gen(function* () {
       const signedWinConfig = (hostPlatform: string) =>
-        createBuildConfig("win", "nsis", "1.2.3", true, false, undefined, undefined).pipe(
+        createBuildConfig("win", "nsis", "1.2.3", true, false, false, undefined, undefined).pipe(
           Effect.map((config) => config.win as Record<string, unknown>),
           Effect.provideService(HostProcess.Platform, hostPlatform),
         );
@@ -1527,6 +1530,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "1.2.3",
         false,
         false,
+        false,
         undefined,
         undefined,
       );
@@ -1536,6 +1540,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  it.effect("routes orbit self-signed macOS builds through the sign-macos hook", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        true,
+        false,
+        undefined,
+        undefined,
+      );
+      const mac = config.mac as Record<string, unknown>;
+      assert.match(mac.sign as string, /scripts[\\/]sign-macos\.ts$/);
+      assert.notProperty(mac, "identity");
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
   it("parses Windows bsdtar member listings with CRLF line endings", () => {
     assert.deepStrictEqual(
       parseWslRuntimeArchiveMembers("./t3-1.2.3-linux-x64/t3\r\nt3-1.2.3-linux-x64/client/\r\n"),
@@ -1583,6 +1604,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             skipBuild: Option.none(),
             keepStage: Option.none(),
             signed: Option.none(),
+            orbitSelfSigned: Option.none(),
             verbose: Option.none(),
             mockUpdates: Option.none(),
             mockUpdateServerPort: Option.none(),
@@ -1607,6 +1629,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         skipBuild: Option.some(false),
         keepStage: Option.some(false),
         signed: Option.some(false),
+        orbitSelfSigned: Option.none(),
         verbose: Option.some(false),
         mockUpdates: Option.some(false),
         mockUpdateServerPort: Option.none(),
