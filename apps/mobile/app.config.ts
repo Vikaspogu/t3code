@@ -277,6 +277,10 @@ const config: ExpoConfig = {
     },
   },
   android: {
+    // Release builds stamp an increasing version code from CI; unset locally.
+    ...(repoEnv.T3CODE_ANDROID_VERSION_CODE
+      ? { versionCode: Number.parseInt(repoEnv.T3CODE_ANDROID_VERSION_CODE, 10) }
+      : {}),
     icon: variant.assets.appIcon,
     package: variant.androidPackage,
     ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE

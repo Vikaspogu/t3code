@@ -247,6 +247,10 @@ jobs:
         working-directory: apps/mobile
         env:
           CI: "1"
+          # Stamp the release version into the APK so installers (Obtainium,
+          # F-Droid clients) see each release as a new, comparable version.
+          T3CODE_MOBILE_VERSION: ${{ env.VERSION }}
+          T3CODE_ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: npx expo prebuild --platform android
 
       # Release build: embeds the JS bundle so the app runs standalone. No

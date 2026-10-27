@@ -865,7 +865,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
       screen: VoiceSheetScreen,
       linking: `${THREAD_LINKING_PREFIX}/voice`,
       options: {
-        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        ...HORIZONTAL_FORM_SHEET_OPTIONS,
         title: "Voice",
       },
     }),
