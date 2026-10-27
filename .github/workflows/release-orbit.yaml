@@ -76,11 +76,15 @@ jobs:
             target="$(gh release view "$tag" --json targetCommitish --jq .targetCommitish)"
             if [[ "$target" != "$GITHUB_SHA" ]]; then
               gh release delete "$tag" --yes --cleanup-tag
-              gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+              gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --draft \
                 --notes "Orbit release ${{ steps.meta.outputs.version }}"
+            else
+              # A rerun re-uploads assets with --clobber; keep the release a
+              # draft until every surface has attached again.
+              gh release edit "$tag" --draft
             fi
           else
-            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --draft \
               --notes "Orbit release ${{ steps.meta.outputs.version }}"
           fi
 
@@ -362,7 +366,7 @@ jobs:
       - name: Build desktop DMG
         env:
           T3_ORBIT_SELF_SIGNED: "true"
-          CSC_NAME: "Developer ID Application: T3 Orbit (Self-Signed)"
+          CSC_NAME: "T3 Orbit (Self-Signed)"
           CSC_LINK: ${{ secrets.T3_ORBIT_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.T3_ORBIT_CSC_KEY_PASSWORD }}
         run: |
@@ -417,3 +421,30 @@ jobs:
             assets+=("$f")
           done
           gh release upload "orbit-v${VERSION}" --clobber "${assets[@]}"
+
+  publish:
+    name: Publish GitHub release
+    # Never let a Gitea Actions mirror try to run this file.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    needs:
+      - release
+      - cli
+      - android
+      - macos
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="orbit-v${VERSION}"
+          # The release stays a draft until every surface has attached its
+          # assets, so updaters (server self-update, electron-updater,
+          # Obtainium) never see a newest version it cannot install yet.
+          gh release edit "$tag" --draft=false
