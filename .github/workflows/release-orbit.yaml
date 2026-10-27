@@ -367,6 +367,27 @@ jobs:
 
       # Self-signed code-signing identity: T3_ORBIT_SELF_SIGNED routes the build
       # through the CSC_LINK/CSC_NAME keychain identity instead of ad-hoc signing.
+      # electron-builder resolves CSC_NAME through `security find-identity -v`,
+      # which drops certificates that do not chain to a trusted anchor. A
+      # self-signed identity is its own anchor, so it must be added to the
+      # system trust store first, or the build silently skips signing and the
+      # verify step fails with "code has no resources but signature indicates
+      # they must be present".
+      - name: Trust self-signed signing identity
+        env:
+          CSC_LINK: ${{ secrets.T3_ORBIT_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.T3_ORBIT_CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          trap 'rm -f /tmp/t3-orbit.p12 /tmp/t3-orbit-cert.pem' EXIT
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::T3_ORBIT_CSC_LINK / T3_ORBIT_CSC_KEY_PASSWORD secrets are not set"
+            exit 1
+          fi
+          printf '%s' "$CSC_LINK" | base64 -d > /tmp/t3-orbit.p12
+          openssl pkcs12 -in /tmp/t3-orbit.p12 -nokeys -passin env:CSC_KEY_PASSWORD -out /tmp/t3-orbit-cert.pem
+          sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/t3-orbit-cert.pem
       - name: Build desktop DMG
         env:
           T3_ORBIT_SELF_SIGNED: "true"
