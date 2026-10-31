@@ -78,18 +78,12 @@ function SkillRow({
             </TooltipPopup>
           </Tooltip>
         ) : null}
-        {canToggle ? (
-          <Switch
-            aria-label={`Enable ${skill.name}`}
-            checked={skill.enabled}
-            disabled={pending}
-            onCheckedChange={onToggle}
-          />
-        ) : (
-          <Badge variant={skill.enabled ? "secondary" : "destructive"}>
-            {skill.enabled ? "Enabled" : "Disabled"}
-          </Badge>
-        )}
+        <Switch
+          aria-label={`Enable ${skill.name}`}
+          checked={skill.enabled}
+          disabled={!canToggle || pending}
+          onCheckedChange={onToggle}
+        />
       </div>
     </div>
   );
