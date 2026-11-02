@@ -635,7 +635,7 @@ const make = Effect.gen(function* () {
     watchTask,
     readActiveTask,
     watchActiveTask,
-    awaitRevocation: (sessionId) =>
+    awaitRevocation: Effect.fn("VoiceHost.awaitRevocation")((sessionId) =>
       sessions.awaitInvalidation(sessionId).pipe(
         Effect.mapError(
           () =>
@@ -645,6 +645,7 @@ const make = Effect.gen(function* () {
             }),
         ),
       ),
+    ),
   });
 });
 

@@ -46,20 +46,19 @@ const make = () => {
     { runtime: CapturedRuntime; calls: Set<Scope.Closeable> }
   >();
   return RuntimeAccess.of({
-    register: (instanceId, runtime) =>
-      Effect.gen(function* () {
-        const entry = { runtime, calls: new Set<Scope.Closeable>() };
-        entries.set(instanceId, entry);
-        yield* Effect.addFinalizer(() =>
-          Effect.gen(function* () {
-            if (entries.get(instanceId) === entry) entries.delete(instanceId);
-            yield* Effect.forEach([...entry.calls], (scope) => Scope.close(scope, Exit.void), {
-              discard: true,
-            });
-          }),
-        );
-      }),
-    use: (instanceId, run) =>
+    register: Effect.fn("RuntimeAccess.register")(function* (instanceId, runtime) {
+      const entry = { runtime, calls: new Set<Scope.Closeable>() };
+      entries.set(instanceId, entry);
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          if (entries.get(instanceId) === entry) entries.delete(instanceId);
+          yield* Effect.forEach([...entry.calls], (scope) => Scope.close(scope, Exit.void), {
+            discard: true,
+          });
+        }),
+      );
+    }),
+    use: Effect.fn("RuntimeAccess.use")((instanceId, run) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
@@ -104,6 +103,7 @@ const make = () => {
           );
         }),
       ),
+    ),
   });
 };
 

@@ -18,7 +18,7 @@ import * as RuntimeAccess from "./RuntimeAccess.ts";
 const decodeSettings = Schema.decodeEffect(CodexSettings);
 const id = ProviderInstanceId.make("voice-personal");
 const peerId = ProviderInstanceId.make("voice-peer");
-const settings = Schema.decodeUnknownSync(CodexSettings)({
+const settings = Schema.decodeSync(CodexSettings)({
   binaryPath: "/captured/codex",
   homePath: "/captured/home",
 });

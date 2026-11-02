@@ -86,7 +86,7 @@ export function VoiceSheet({
               size={14}
             />
             <Text className="flex-1 text-xs text-warning-foreground">
-              Paused — approval waiting in the thread. Close this sheet to review it.
+              Paused. Approval waiting in the thread. Close this sheet to review it.
             </Text>
           </View>
         ) : null}
@@ -146,8 +146,8 @@ export function VoiceSheet({
             ) : null}
             {task.steps.length > 0 ? (
               <View className="gap-1">
-                {task.steps.map((step, index) => (
-                  <View key={`${index}:${step}`} className="flex-row items-center gap-1.5">
+                {[...new Set(task.steps)].map((step) => (
+                  <View key={step} className="flex-row items-center gap-1.5">
                     <SymbolView
                       name="checkmark"
                       tintColorClassName="accent-foreground-tertiary"

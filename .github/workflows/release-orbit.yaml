@@ -119,11 +119,10 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
         with:
-          node-version: "25.9.0"
+          node-version-file: package.json
 
       - name: Setup vite-plus
         run: |
-          corepack enable
           # Pin comes from the pnpm catalog so the two cannot drift apart.
           npm install -g "vite-plus@$(grep -oP '^ *vite-plus: *\K[0-9.]+' pnpm-workspace.yaml)"
 
@@ -142,8 +141,7 @@ jobs:
           node -e 'const fs=require("fs");const f="apps/server/package.json";const j=JSON.parse(fs.readFileSync(f));j.version="${{ needs.release.outputs.version }}";fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")'
 
       - name: Build server dist
-        # Web client first: `cli.ts build` bundles apps/web/dist into the
-        # server package; build-exe then compiles dist-exe/t3 with bun.
+        # Bundle the web client before compiling the Node executable.
         run: |
           vp run --filter @t3tools/web build
           node apps/server/scripts/cli.ts build
@@ -230,11 +228,10 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
         with:
-          node-version: "25.9.0"
+          node-version-file: package.json
 
       - name: Setup vite-plus
         run: |
-          corepack enable
           # Pin comes from the pnpm catalog so the two cannot drift apart.
           npm install -g "vite-plus@$(grep -oP '^ *vite-plus: *\K[0-9.]+' pnpm-workspace.yaml)"
 
@@ -343,11 +340,10 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
         with:
-          node-version: "25.9.0"
+          node-version-file: package.json
 
       - name: Setup vite-plus
         run: |
-          corepack enable
           # BSD grep on macOS has no -P; sed extracts the same catalog pin.
           npm install -g "vite-plus@$(sed -n 's/^ *vite-plus: *\([0-9.]*\).*/\1/p' pnpm-workspace.yaml | head -1)"
 

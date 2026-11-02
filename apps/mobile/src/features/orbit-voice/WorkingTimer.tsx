@@ -1,5 +1,6 @@
-import { formatCallClock, formatWorkingTimerNow } from "@t3tools/shared/orchestrationTiming";
-import { useEffect, useState } from "react";
+import { formatCallClock, formatWorkingTimer } from "@t3tools/shared/orchestrationTiming";
+import * as DateTime from "effect/DateTime";
+import { useVisibleSecondClock } from "../threads/use-visible-second-clock";
 import { AppText as Text } from "../../components/ui/AppText";
 
 /** Ticking elapsed-time label, mirroring the web chat WorkingTimer. */
@@ -10,12 +11,9 @@ export function WorkingTimer({
   readonly createdAt: string;
   readonly className?: string;
 }) {
-  const [text, setText] = useState(() => formatWorkingTimerNow(createdAt));
-  useEffect(() => {
-    setText(formatWorkingTimerNow(createdAt));
-    const id = setInterval(() => setText(formatWorkingTimerNow(createdAt)), 1000);
-    return () => clearInterval(id);
-  }, [createdAt]);
+  const nowMs = useVisibleSecondClock(true);
+  const text =
+    formatWorkingTimer(createdAt, DateTime.formatIso(DateTime.makeUnsafe(nowMs))) ?? "0s";
   return (
     <Text className={className} style={{ fontVariant: ["tabular-nums"] }}>
       {text}
@@ -31,13 +29,8 @@ export function CallTimer({
   readonly createdAt: string;
   readonly className?: string;
 }) {
-  const elapsedSeconds = () => Math.max(0, Math.floor((Date.now() - Date.parse(createdAt)) / 1000));
-  const [seconds, setSeconds] = useState(elapsedSeconds);
-  useEffect(() => {
-    setSeconds(elapsedSeconds());
-    const id = setInterval(() => setSeconds(elapsedSeconds()), 1000);
-    return () => clearInterval(id);
-  }, [createdAt]);
+  const nowMs = useVisibleSecondClock(true);
+  const seconds = Math.max(0, Math.floor((nowMs - Date.parse(createdAt)) / 1000));
   return (
     <Text className={className} style={{ fontVariant: ["tabular-nums"] }}>
       {formatCallClock(seconds)}

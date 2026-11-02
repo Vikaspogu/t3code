@@ -17,6 +17,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as Queue from "effect/Queue";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
@@ -322,6 +323,7 @@ describe("voice calls", () => {
   it.effect("retries an unconfirmed task-result speech and publishes a written fallback", () =>
     Effect.gen(function* () {
       let resultSpeaks = 0;
+      const spoken = yield* Queue.unbounded<void>();
       yield* Effect.gen(function* () {
         const calls = yield* VoiceCalls.VoiceCalls;
         yield* calls.start(owner, { callId: "call", threadId: target.threadId, offerSdp: "offer" });
@@ -330,19 +332,13 @@ describe("voice calls", () => {
           audioTurnId: "audio",
           transcript: "Fix the button.",
         });
-        for (let index = 0; index < 200 && resultSpeaks < 1; index++) yield* Effect.yieldNow;
+        yield* Queue.take(spoken);
         expect(resultSpeaks).toBe(1);
-        for (let index = 0; index < 10 && resultSpeaks < 2; index++) {
-          yield* Effect.yieldNow;
-          yield* TestClock.adjust("10 seconds");
-        }
+        yield* TestClock.adjust("10 seconds");
+        yield* Queue.take(spoken);
         expect(resultSpeaks).toBe(2);
-        let message: string | null = null;
-        for (let index = 0; index < 10 && message === null; index++) {
-          yield* Effect.yieldNow;
-          yield* TestClock.adjust("10 seconds");
-          message = (yield* calls.snapshot(owner, "call", 0)).message;
-        }
+        yield* TestClock.adjust("10 seconds");
+        const message = (yield* calls.snapshot(owner, "call", 0)).message;
         expect(message).toBe(
           "The spoken task result is delayed. Check the coding thread for details.",
         );
@@ -360,8 +356,11 @@ describe("voice calls", () => {
                   answerSdp: "answer",
                   classify: () => Effect.succeed("task" as const),
                   speak: (text: string) =>
-                    Effect.sync(() => {
-                      if (text.startsWith("The coding task completed")) resultSpeaks += 1;
+                    Effect.gen(function* () {
+                      if (text.startsWith("The coding task completed")) {
+                        resultSpeaks += 1;
+                        yield* Queue.offer(spoken, undefined);
+                      }
                     }),
                 }),
             },
@@ -373,6 +372,7 @@ describe("voice calls", () => {
   it.effect("does not retry a task-result speech once an assistant caption confirms it", () =>
     Effect.gen(function* () {
       let resultSpeaks = 0;
+      const spoken = yield* Queue.unbounded<void>();
       const listener = yield* Deferred.make<NativeVoice.NativeVoiceListener>();
       yield* Effect.gen(function* () {
         const calls = yield* VoiceCalls.VoiceCalls;
@@ -382,16 +382,14 @@ describe("voice calls", () => {
           audioTurnId: "audio",
           transcript: "Fix the button.",
         });
-        for (let index = 0; index < 200 && resultSpeaks < 1; index++) yield* Effect.yieldNow;
+        yield* Queue.take(spoken);
         expect(resultSpeaks).toBe(1);
         yield* (yield* Deferred.await(listener))({
           type: "caption",
           role: "assistant",
           text: "The coding task completed. Fixed.",
         });
-        for (let index = 0; index < 10; index++) yield* Effect.yieldNow;
         yield* TestClock.adjust("20 seconds");
-        yield* Effect.yieldNow;
         const snapshot = yield* calls.snapshot(owner, "call", 0);
         expect(resultSpeaks).toBe(1);
         expect(snapshot.message).toBeNull();
@@ -410,8 +408,11 @@ describe("voice calls", () => {
                     answerSdp: "answer",
                     classify: () => Effect.succeed("task" as const),
                     speak: (text: string) =>
-                      Effect.sync(() => {
-                        if (text.startsWith("The coding task completed")) resultSpeaks += 1;
+                      Effect.gen(function* () {
+                        if (text.startsWith("The coding task completed")) {
+                          resultSpeaks += 1;
+                          yield* Queue.offer(spoken, undefined);
+                        }
                       }),
                   };
                 }),
@@ -447,12 +448,12 @@ describe("voice calls", () => {
       };
       yield* Effect.gen(function* () {
         const calls = yield* VoiceCalls.VoiceCalls;
-        const starting = yield* Effect.all(
-          ["first", "second"].map((callId) =>
+        const starting = yield* Effect.forEach(
+          ["first", "second"],
+          (callId) =>
             calls
               .start(owner, { callId, threadId: target.threadId, offerSdp: "offer" })
               .pipe(Effect.exit, Effect.provideService(Clock.Clock, gatedClock)),
-          ),
           { concurrency: "unbounded" },
         ).pipe(Effect.forkChild);
         yield* Deferred.await(bothReadingTime);

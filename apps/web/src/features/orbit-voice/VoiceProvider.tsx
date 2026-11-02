@@ -3,15 +3,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import {
-  createContext,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
+import { createContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { MicIcon, MicOffIcon, PhoneOffIcon, AudioLinesIcon } from "lucide-react";
 import { Button } from "../../components/ui/button";
@@ -108,9 +100,11 @@ export function VoiceProvider({
   const canOperate = useAtomValue(
     voiceCommands.start.permissionAtom(view.target?.environmentId ?? null),
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Revoke microphone access when the connection loses permission.
   useEffect(() => {
     if (view.target && !canOperate) controller.permissionRevoked();
   }, [canOperate, controller, view.target]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release the call and microphone when the page or provider closes.
   useEffect(() => {
     const close = () => controller.end();
     window.addEventListener("pagehide", close);
@@ -128,16 +122,10 @@ export function VoiceProvider({
   const conversationKey = `${view.snapshot?.callId ?? "pending"}:${active}`;
   const conversationExpanded =
     conversationPreference?.key === conversationKey ? conversationPreference.expanded : active;
-  const setConversationExpanded = useCallback(
-    (expanded: boolean) => {
-      setConversationPreference({ key: conversationKey, expanded });
-    },
-    [conversationKey],
-  );
-  const context = useMemo(
-    () => ({ controller, view, conversationExpanded, setConversationExpanded }),
-    [controller, view, conversationExpanded, setConversationExpanded],
-  );
+  const setConversationExpanded = (expanded: boolean) => {
+    setConversationPreference({ key: conversationKey, expanded });
+  };
+  const context = { controller, view, conversationExpanded, setConversationExpanded };
   return (
     <VoiceContext value={context}>
       {children}

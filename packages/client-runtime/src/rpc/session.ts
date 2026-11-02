@@ -57,6 +57,8 @@ export interface RpcSession {
   ) => ServerConfigSubscription;
   readonly ready: Effect.Effect<void, ConnectionAttemptError>;
   readonly probe: Effect.Effect<void, ConnectionAttemptError>;
+  /** Frames received so far: proof the socket is alive that needs no reply. */
+  readonly inboundFrames: Effect.Effect<number>;
   readonly closed: Effect.Effect<never, ConnectionAttemptError>;
 }
 
@@ -220,15 +222,19 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         Effect.asVoid,
       ),
     });
+    // The protocol never reopens its socket, so every frame counted here came
+    // from this session's one socket.
+    let inboundFrames = 0;
+    const countingWebSocketConstructor: typeof webSocketConstructor = (url, options) => {
+      const socket = webSocketConstructor(url, options);
+      socket.addEventListener("message", () => {
+        inboundFrames += 1;
+      });
+      return socket;
+    };
     const useHttpTransport = options.transport === "http";
-    // HTTP fallback transport (Android Prisma): the /ws upgrade never
-    // completes there, but HTTPS POSTs stream fine, so speak the same
-    // protocol over the /rpc NDJSON endpoint instead of a socket. The URL
-    // reuses the prepared socket URL's host, auth, and metadata params.
-    // ponytail: bearer-auth HTTP sessions reuse one 5-minute wsTicket for
-    // every POST and break when it expires — the supported HTTP path is
-    // same-origin cookie auth, which re-authenticates per POST. Add ticket
-    // re-issue per POST if remote bearer clients ever need HTTP fallback.
+    // Prisma blocks WebSocket upgrades but permits NDJSON POSTs with the same authentication metadata.
+    // HTTP bearer sessions reuse a five-minute wsTicket; cookie authentication is checked on every POST.
     const layerProtocol = useHttpTransport
       ? RpcClient.layerProtocolHttp({
           url: httpRpcUrlFromSocketUrl(connection.socketUrl),
@@ -255,7 +261,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
               Socket.layerWebSocket(connection.socketUrl, {
                 openTimeout: SOCKET_OPEN_TIMEOUT,
               }).pipe(
-                Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)),
+                Layer.provide(
+                  Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor),
+                ),
               ),
               RpcSerialization.layerJson,
               Layer.succeed(RpcClient.ConnectionHooks, hooks),
@@ -313,17 +321,11 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
               themesEvent:
                 event.type === "environmentThemesUpdated"
                   ? event
-                  : event.type === "snapshot" &&
-                      event.config.environment.capabilities.environmentThemes !== true
-                    ? undefined
-                    : Option.getOrUndefined(current)?.themesEvent,
+                  : Option.getOrUndefined(current)?.themesEvent,
               sourcesEvent:
                 event.type === "usageLimitSourcesUpdated"
                   ? event
-                  : event.type === "snapshot" &&
-                      event.config.environment.capabilities.usageLimitSources !== true
-                    ? undefined
-                    : Option.getOrUndefined(current)?.sourcesEvent,
+                  : Option.getOrUndefined(current)?.sourcesEvent,
             } satisfies ServerConfigReplayState;
             return [
               Option.some({ event, replay: next, revision: next.revision }),
@@ -436,11 +438,8 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         ),
       );
     const probe = initialConfig.pipe(
-      Effect.flatMap((config) =>
-        (config.environment.capabilities.connectionProbe === true
-          ? protocolClient[WS_METHODS.serverProbe]({})
-          : protocolClient[WS_METHODS.serverGetConfig]({})
-        ).pipe(Effect.mapError(mapRpcError)),
+      Effect.flatMap(() =>
+        protocolClient[WS_METHODS.serverProbe]({}).pipe(Effect.mapError(mapRpcError)),
       ),
       Effect.asVoid,
       Effect.withSpan("clientRuntime.connection.rpcSession.probe"),
@@ -456,6 +455,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         Effect.raceFirst(Deferred.await(disconnected)),
       ),
       probe,
+      inboundFrames: Effect.sync(() => inboundFrames),
       closed: Effect.raceFirst(
         Deferred.await(disconnected),
         Deferred.await(configSubscriptionClosed),

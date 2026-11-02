@@ -917,7 +917,7 @@ export const IRIS_THEME: ThemeDefinition = {
   sidebarArtwork: true,
 };
 
-export const SLATE_THEME: ThemeDefinition = {
+const SLATE_THEME: ThemeDefinition = {
   id: "slate",
   label: "Slate Studio",
   appearance: "light",
@@ -1051,7 +1051,7 @@ export const SLATE_THEME: ThemeDefinition = {
   },
 };
 
-export const ZINC_THEME: ThemeDefinition = {
+const ZINC_THEME: ThemeDefinition = {
   id: "zinc",
   label: "Zinc Terminal",
   appearance: "light",
@@ -1185,7 +1185,7 @@ export const ZINC_THEME: ThemeDefinition = {
   },
 };
 
-export const STONE_THEME: ThemeDefinition = {
+const STONE_THEME: ThemeDefinition = {
   id: "stone",
   label: "Ember Stone",
   appearance: "light",

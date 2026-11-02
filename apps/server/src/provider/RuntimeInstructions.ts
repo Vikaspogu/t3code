@@ -5,16 +5,7 @@ import {
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 
-/**
- * What T3 Code itself injects into a provider's turns, per driver. Rendered for
- * the settings UI so users can see the system-prompt additions T3 makes
- * without diffing source. Everything else in the prompt comes from the
- * provider's own harness, not from us.
- *
- * Sections are condition-labeled because attachment depends on per-turn state
- * (whether the t3-code MCP server and preview tools are connected); the titles
- * name the condition instead of hiding it.
- */
+// Section titles name the per-turn conditions that attach T3 instructions.
 
 const WHEN_MCP_ATTACHED = "attached when the t3-code MCP server is connected to the thread";
 

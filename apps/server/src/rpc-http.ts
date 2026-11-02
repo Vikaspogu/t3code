@@ -18,11 +18,14 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
+import * as NpmRelease from "./cloud/npmRelease.ts";
+import * as PeerLinks from "./peer/PeerLinks.ts";
+import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import { rpcInstrumentationLayer } from "./observability/RpcInstrumentation.ts";
-import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
@@ -41,29 +44,19 @@ import {
   hasCompatibleOrchestrationProtocol,
   layerWsRpc,
   readClientAnalyticsProps,
-  readClientConnectionOrigin,
+  readClientOwners,
 } from "./ws.ts";
 
-/**
- * HTTP fallback transport for the WebSocket RPC group.
- *
- * Android Prisma's browser never completes the /ws upgrade (its proxy holds
- * the request), but streams HTTPS responses fine. This route serves the exact
- * same `ServerWsRpcGroup` over chunked NDJSON POSTs: one POST carries one
- * batch of client messages, responses stream back as newline-delimited JSON.
- *
- * Auth parity with /ws: every POST re-authenticates via the same upgrade
- * authenticator (browser cookie, or a short-lived wsTicket for bearer/DPoP —
- * note tickets are stateless 5-minute HMACs that appear in the URL of every
- * POST, an accepted cost of this fallback), and an open POST's stream is torn
- * down on session revocation: the response body stream is interrupted the
- * moment `awaitInvalidation` fires, mirroring how a /ws socket is torn down.
- */
+// Prisma blocks WebSocket upgrades; serve the same RPC group over NDJSON with per-request authentication.
+// Session revocation interrupts the response body, which outlives the request handler.
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
-    const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+    const analytics = yield* AnalyticsService.AnalyticsService;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    const npmRelease = yield* NpmRelease.NpmRelease;
+    const peerLinks = yield* PeerLinks.PeerLinks;
+    const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
@@ -92,7 +85,7 @@ export const layer = Layer.unwrap(
         }
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
-        const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
+        const session = yield* serverAuth.authenticateWebSocketUpgrade(request, "rpc").pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
             failEnvironmentAuthInvalid(
               EnvironmentAuth.serverAuthCredentialReason(error),
@@ -103,12 +96,11 @@ export const layer = Layer.unwrap(
             failEnvironmentInternal("internal_error", error),
           ),
         );
-        const clientOrigin = readClientConnectionOrigin(request);
         const clientAnalyticsProps = readClientAnalyticsProps(request);
-        yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
+        yield* analytics.recordOwners(readClientOwners(request), "client");
+        const reportProfiles = yield* serverBrowser.profileReporter;
         // No per-POST "client.connected" analytics event: one WS connection
-        // fires it once, one HTTP session fires many POSTs; the metadata
-        // update above already records origin and timestamp.
+        // fires it once, while one HTTP session makes many POSTs.
         const rpcHttpEffect = yield* Effect.gen(function* () {
           // Each POST gets its own protocol instance: RpcServer.make registers
           // its writeRequest on the protocol, so sharing one across requests
@@ -122,17 +114,10 @@ export const layer = Layer.unwrap(
             ),
             Effect.forkScoped,
           );
-          // @effect-diagnostics-next-line returnEffectInGen:off
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(
-              session,
-              clientOrigin,
-              clientAnalyticsProps,
-              previewAutomationBroker,
-              serverBrowser,
-            ).pipe(
+            layerWsRpc(session, clientAnalyticsProps, serverBrowser, reportProfiles).pipe(
               Layer.provideMerge(RpcSerialization.layerNdjson),
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.
@@ -148,6 +133,9 @@ export const layer = Layer.unwrap(
                 ),
               ),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+              Layer.provide(Layer.succeed(NpmRelease.NpmRelease, npmRelease)),
+              Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
+              Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
@@ -168,14 +156,7 @@ export const layer = Layer.unwrap(
             ),
           ),
         );
-        // The guard must wrap the response body stream, not this handler's
-        // effect: httpEffect completes as soon as the batch is decoded, while
-        // the NDJSON body keeps streaming to the client afterwards. Presence
-        // is registered via a scope-bound finalizer — Channel.unwrap provides
-        // the stream's scope, so markConnected runs on first pull, the
-        // finalizer fires when the stream ends or is interrupted, and a body
-        // that never starts counts nothing. Revocation interrupts the stream
-        // through the same awaitInvalidation race a /ws socket gets.
+        // Scope presence to body consumption, and interrupt the stream immediately on session revocation.
         const response = yield* rpcHttpEffect;
         const guardedResponse =
           response.body._tag === "Stream"
@@ -190,7 +171,11 @@ export const layer = Layer.unwrap(
                       );
                       return (response.body as HttpBody.Stream).stream;
                     }),
-                  ).pipe(Stream.interruptWhen(sessions.awaitInvalidation(session.sessionId))),
+                  ).pipe(
+                    Stream.interruptWhen(
+                      sessions.awaitInvalidation(session.sessionId, session.proofKeyThumbprint),
+                    ),
+                  ),
                   response.body.contentType,
                   response.body.contentLength,
                 ),
@@ -212,6 +197,7 @@ export const layer = Layer.unwrap(
     );
   }),
 ).pipe(
+  Layer.provide(NpmRelease.layer),
   // Shared instances for the hoisted services above: built once at server
   // startup instead of per POST.
   Layer.provide(

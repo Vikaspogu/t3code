@@ -246,6 +246,7 @@ const fixture = ({
         if (!clientManagedHandoffs) yield* speech(text);
       });
     const client = CodexClient.CodexAppServerClient.of({
+      awaitTermination: Effect.never,
       raw: {
         notifications: Stream.fromQueue(queue),
         requests: Stream.empty,

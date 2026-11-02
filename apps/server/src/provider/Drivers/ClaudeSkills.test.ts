@@ -8,7 +8,6 @@ import {
   ClaudeSkillToggleError,
   discoverClaudeSkills,
   setClaudeSkillEnabled,
-  skillOverrideSettingsPaths,
 } from "./ClaudeSkills.ts";
 import { planClaudeSkillDispatch } from "./ClaudeSkillDispatch.ts";
 
@@ -240,7 +239,6 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
         {
           leadingText: undefined,
           commandText: "/plugin:alias focus on auth",
-          skillName: "plugin:alias",
         },
       );
       assert.deepEqual(
@@ -364,6 +362,8 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
         '--add-dir "extra skills"',
         '--add-dir="extra skills"',
         `--add-dir missing --add-dir "${extraDir}"`,
+        `--add-dir "${extraDir}" --add-dir missing`,
+        `--add-dir missing "${extraDir}"`,
       ]) {
         const settings = { homePath: configDir, launchArgs };
         const skills = yield* discoverClaudeSkills(settings, workspace);
@@ -387,7 +387,6 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
         {
           leadingText: undefined,
           commandText: "/demo",
-          skillName: "demo",
         },
       );
       yield* writeSkill(

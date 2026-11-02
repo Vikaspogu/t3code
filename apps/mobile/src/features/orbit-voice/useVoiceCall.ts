@@ -9,7 +9,7 @@ import {
   type VoiceRpc,
 } from "@t3tools/client-runtime/voice";
 import { createMobileVoicePlatform } from "@t3tools/client-runtime/voice/mobile";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useVoiceAvailability } from "./availability";
 import { voiceCommands } from "./commands";
@@ -23,20 +23,17 @@ function valueOrThrow<A, E>(result: AtomCommandResult<A, E>): A {
   return result.value;
 }
 
-// ponytail: one controller per thread for the whole app session; a controller holds no
-// resources until start() and is reusable after End. The entry is replaced when the rpc
-// identity changes so a rebound registry cannot leave calls pinned to a stale client.
-const controllers = new Map<string, { rpc: VoiceRpc; controller: VoiceCallController }>();
+// Hook consumers share the app registry but create distinct RPC wrappers.
+const controllers = new Map<string, VoiceCallController>();
 
 export function getVoiceController(target: ScopedThreadRef, rpc: VoiceRpc): VoiceCallController {
   const key = `${target.environmentId}:${target.threadId}`;
-  let entry = controllers.get(key);
-  if (!entry || entry.rpc !== rpc) {
-    void entry?.controller.end();
-    entry = { rpc, controller: new VoiceCallController(rpc, createMobileVoicePlatform()) };
-    controllers.set(key, entry);
+  let controller = controllers.get(key);
+  if (!controller) {
+    controller = new VoiceCallController(rpc, createMobileVoicePlatform());
+    controllers.set(key, controller);
   }
-  return entry.controller;
+  return controller;
 }
 
 function useVoiceRpc(): VoiceRpc {
@@ -89,12 +86,7 @@ export function useVoiceCall(
 } {
   const rpc = useVoiceRpc();
   const unavailable = useVoiceAvailability(target, providerInstanceId);
-  const key = `${target.environmentId}:${target.threadId}`;
-  const controller = useMemo(() => getVoiceController(target, rpc), [rpc, key]);
-  const [view, setView] = useState<VoiceCallView>(() => controller.getSnapshot());
-  useEffect(() => {
-    setView(controller.getSnapshot());
-    return controller.subscribe(() => setView(controller.getSnapshot()));
-  }, [controller]);
+  const controller = useMemo(() => getVoiceController(target, rpc), [rpc, target]);
+  const view = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   return { controller, view, unavailable };
 }

@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
+  OrchestrationV2Command,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -16,6 +17,8 @@ import {
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
 } from "./orchestrationV2.ts";
+
+const decodeOrchestrationV2Command = Schema.decodeUnknownSync(OrchestrationV2Command);
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 
@@ -381,6 +384,9 @@ describe("orchestration V2 contracts", () => {
               index: 1,
               label: "Member",
               state: "completed" as const,
+              model: "claude-opus-5[1m]",
+              effort: "xhigh",
+              speed: "standard",
               prompt: preview,
               result: preview,
             },
@@ -402,10 +408,16 @@ describe("orchestration V2 contracts", () => {
         expect(decode(json).workflow?.agents[0]).toMatchObject({
           prompt: preview,
           result: preview,
+          model: "claude-opus-5[1m]",
+          effort: "xhigh",
+          speed: "standard",
         });
         expect(decode(incoming).workflow?.agents[0]).toMatchObject({
           prompt: preview,
           result: preview,
+          model: "claude-opus-5[1m]",
+          effort: "xhigh",
+          speed: "standard",
         });
       }
     },

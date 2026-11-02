@@ -116,6 +116,7 @@ function CallTimer({ createdAt }: { createdAt: string }) {
   const [durationSeconds, setDurationSeconds] = useState(() =>
     Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000)),
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Update the active call clock once per second and cancel its timer on unmount.
   useEffect(() => {
     const interval = window.setInterval(() => {
       setDurationSeconds(
@@ -142,6 +143,7 @@ function VoiceConversation({
   const following = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
   const lastSequence = captions.at(-1)?.sequence;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keep the transcript viewport at the newest caption while following.
   useEffect(() => {
     if (lastSequence !== undefined && expanded && following.current && viewport.current) {
       viewport.current.scrollTop = viewport.current.scrollHeight;
@@ -401,7 +403,7 @@ function BoundVoicePanel({
               ) : task?.state === "waiting" ? (
                 <p className="flex items-start gap-1.5 rounded-md bg-warning-surface px-2.5 py-2 text-warning-foreground">
                   <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-                  Paused — approval waiting in the thread.
+                  Paused. Approval waiting in the thread.
                 </p>
               ) : task?.state === "completed" ? (
                 <p className="flex items-center gap-1.5 text-success-foreground">
@@ -427,11 +429,8 @@ function BoundVoicePanel({
               (task.state === "working" || task.state === "waiting") &&
               task.steps.length > 0 ? (
                 <ul className="space-y-0.5">
-                  {task.steps.map((step, index) => (
-                    <li
-                      key={`${index}:${step}`}
-                      className="flex items-center gap-1.5 text-muted-foreground"
-                    >
+                  {[...new Set(task.steps)].map((step) => (
+                    <li key={step} className="flex items-center gap-1.5 text-muted-foreground">
                       <CircleCheckIcon
                         aria-hidden="true"
                         className="size-3 shrink-0 text-success-foreground"

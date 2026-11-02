@@ -604,14 +604,14 @@ it.live.each(["approval_request", "user_input_request", "secret_request"] as con
       assert.strictEqual(current.turnItems.find((item) => item.id === card.id)?.status, "waiting");
       const observed = yield* setup.observe();
       assert.strictEqual((yield* observed.read).state, "working");
-      assert.strictEqual(observed.reads.length, 2);
+      assert.strictEqual(observed.reads.length, 3);
       assert.isFalse(observed.reads[0]!.includes("providerTurns"));
       assert.isTrue(observed.reads[1]!.includes("providerTurns"));
       const root = current.runs[0]!.rootNodeId;
       yield* setup.writeItem({ ...card, nodeId: root, providerTurnId: null });
       const currentCard = yield* setup.observe();
       assert.strictEqual((yield* currentCard.read).state, "waiting");
-      assert.strictEqual(currentCard.reads.length, 1);
+      assert.strictEqual(currentCard.reads.length, 2);
     }),
 );
 
@@ -638,7 +638,7 @@ it.live("resolves child approval across earlier provider turns in the same curre
     );
     const observed = yield* setup.observe();
     assert.strictEqual((yield* observed.read).state, "waiting");
-    assert.strictEqual(observed.reads.length, 2);
+    assert.strictEqual(observed.reads.length, 3);
   }),
 );
 
@@ -648,7 +648,7 @@ it.live("does not infer attention from a card with missing association", () =>
     yield* setup.writeItem(setup.pending("secret_request", null, null));
     const observed = yield* setup.observe();
     assert.strictEqual((yield* observed.read).state, "working");
-    assert.strictEqual(observed.reads.length, 1);
+    assert.strictEqual(observed.reads.length, 2);
   }),
 );
 
@@ -657,7 +657,7 @@ it.live("reads no provider history without cards and ignores an unknown provider
     const setup = yield* attentionFixture;
     const withoutCard = yield* setup.observe();
     assert.strictEqual((yield* withoutCard.read).state, "working");
-    assert.strictEqual(withoutCard.reads.length, 1);
+    assert.strictEqual(withoutCard.reads.length, 2);
     assert.isFalse(withoutCard.reads[0]!.includes("providerTurns"));
     yield* setup.writeItem(
       setup.pending(
@@ -668,7 +668,7 @@ it.live("reads no provider history without cards and ignores an unknown provider
     );
     const unknown = yield* setup.observe();
     assert.strictEqual((yield* unknown.read).state, "working");
-    assert.strictEqual(unknown.reads.length, 2);
+    assert.strictEqual(unknown.reads.length, 3);
   }),
 );
 
@@ -726,7 +726,7 @@ it.live.each(["restart", "failed", "completed"] as const)(
       const result = yield* observed.read;
       assert.strictEqual(result.state, change === "restart" ? "working" : change);
       assert.strictEqual(result.result, change === "completed" ? resultText : null);
-      assert.strictEqual(observed.reads.length, 2);
+      assert.strictEqual(observed.reads.length, change === "restart" ? 3 : 2);
     }),
 );
 
@@ -756,7 +756,10 @@ it.live.each(["queued", "waiting", "failed", "cancelled", "completed"] as const)
         result.state,
         status === "queued" || status === "failed" || status === "cancelled" ? status : "working",
       );
-      assert.strictEqual(observed.reads.length, 1);
+      assert.strictEqual(
+        observed.reads.length,
+        status === "failed" || status === "cancelled" ? 1 : 2,
+      );
       assert.isFalse(observed.reads[0]!.includes("providerTurns"));
     }),
 );
@@ -1070,7 +1073,7 @@ it.live.each(["failed", "cancelled"] as const)(
       const rows = setup.rows.map((row) => ({ ...row, status }));
       const { host, target } = yield* setup.withReceipt({
         listByCommandId: () => Effect.succeed(rows),
-        get: () => Effect.succeed(Option.some(rows[0]!)),
+        get: () => Effect.succeedSome(rows[0]!),
       });
       const failure = yield* Effect.flip(host.send(target, setup.correction));
       assert.strictEqual(failure.code, "dispatch-failed");

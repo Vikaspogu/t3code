@@ -1,11 +1,12 @@
+// @effect-diagnostics nodeBuiltinImport:off - Node hashing independently computes the worker authentication fixture digest.
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NativeClients from "./NativeClients.ts";
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 const fixtureToken = "fixture-token-example-0123456789";
-const tokenDigest = createHash("sha256").update(fixtureToken).digest("hex");
+const tokenDigest = NodeCrypto.createHash("sha256").update(fixtureToken).digest("hex");
 const auth = (name: string) => ({
   authorization: `Basic ${btoa(`${name}:${fixtureToken}`)}`,
 });

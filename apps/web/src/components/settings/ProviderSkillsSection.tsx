@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   providerSupportsSkillToggle,
   type EnvironmentId,
@@ -116,19 +116,13 @@ export function ProviderSkillsSection({
 
   const setSkillEnabled = useAtomCommand(serverEnvironment.setProviderSkillEnabled);
 
-  const snapshots = useMemo(
-    () =>
-      provider?.workspaceSnapshots === undefined || provider.workspaceSnapshots.length === 0
-        ? []
-        : [...provider.workspaceSnapshots].sort((a, b) => snapshotSortKey(b) - snapshotSortKey(a)),
-    [provider?.workspaceSnapshots],
-  );
+  const snapshots =
+    provider?.workspaceSnapshots === undefined || provider.workspaceSnapshots.length === 0
+      ? []
+      : [...provider.workspaceSnapshots].sort((a, b) => snapshotSortKey(b) - snapshotSortKey(a));
 
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
-  const activeSnapshot = useMemo(
-    () => snapshots.find((snapshot) => snapshot.cwd === selectedCwd) ?? snapshots[0],
-    [snapshots, selectedCwd],
-  );
+  const activeSnapshot = snapshots.find((snapshot) => snapshot.cwd === selectedCwd) ?? snapshots[0];
 
   const canToggle =
     !readOnly &&

@@ -40,13 +40,7 @@ export function appendOrchestrationProtocol(socketUrl: string): string {
   return url.toString();
 }
 
-/**
- * Rewrites a prepared /ws socket URL into the POST /rpc HTTP fallback
- * endpoint: same host, same query params (auth ticket, client metadata,
- * orchestration protocol), new scheme and path. Used only when the client
- * selects the HTTP transport (Android Prisma never completes a WebSocket
- * upgrade but streams HTTPS responses fine).
- */
+// HTTP fallback preserves the prepared socket URL's authentication and client metadata.
 export function httpRpcUrlFromSocketUrl(socketUrl: string): string {
   const url = new URL(socketUrl);
   if (url.protocol !== "wss:" && url.protocol !== "ws:") {
