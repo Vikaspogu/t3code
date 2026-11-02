@@ -15,6 +15,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 
 import * as DesktopBackendPool from "./DesktopBackendPool.ts";
+import { DEFAULT_BACKEND_READINESS_TIMEOUT } from "./DesktopBackendManager.ts";
 
 const BOOTSTRAP_TRANSIENT_RETRY_TIMEOUT = Duration.seconds(15);
 const BOOTSTRAP_TRANSIENT_RETRY_INTERVAL = Duration.millis(500);
@@ -80,7 +81,10 @@ export const make = Effect.gen(function* () {
 
         const instances = yield* pool.list;
         const primary = instances.find((instance) => instance.id === PRIMARY_LOCAL_ENVIRONMENT_ID);
-        const configOption = primary === undefined ? Option.none() : yield* primary.currentConfig;
+        if (primary === undefined || !(yield* primary.waitForReady(Duration.infinity))) {
+          return yield* new DesktopLocalEnvironmentAuthBackendNotConfiguredError();
+        }
+        const configOption = yield* primary.currentConfig;
         if (Option.isNone(configOption)) {
           return yield* new DesktopLocalEnvironmentAuthBackendNotConfiguredError();
         }
@@ -119,7 +123,13 @@ export const make = Effect.gen(function* () {
         return session.access_token;
       }),
     )
-    .pipe(Effect.withSpan("desktop.localEnvironmentAuth.getBearerToken"));
+    .pipe(
+      Effect.timeoutOrElse({
+        duration: DEFAULT_BACKEND_READINESS_TIMEOUT,
+        orElse: () => Effect.fail(new DesktopLocalEnvironmentAuthBackendNotConfiguredError()),
+      }),
+      Effect.withSpan("desktop.localEnvironmentAuth.getBearerToken"),
+    );
 
   return DesktopLocalEnvironmentAuth.of({ getBearerToken });
 });
