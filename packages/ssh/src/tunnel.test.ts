@@ -99,16 +99,12 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(script, "npm exec");
     assert.notInclude(script, "t3@latest");
     assert.notInclude(script, 'exec t3 "$@"');
-    // Concurrent launches serialize on a per-version mkdir lock and recheck
-    // the completion marker after acquiring it.
+    // Concurrent launches serialize with noclobber and recheck after acquiring the lock.
     assert.include(
       script,
       'T3_LOCK="$HOME/.t3/runtime/versions/.$T3_ARCHIVE_VERSION.install.lock"',
     );
-    // mkdir is the exclusive create; the pid follows atomically. A dead owner
-    // is reclaimed at once, a never-published owner after a short grace.
-    assert.include(script, 'while ! mkdir "$T3_LOCK" 2>/dev/null; do');
-    assert.include(script, 'mv "$T3_LOCK/pid.tmp" "$T3_LOCK/pid"');
+    assert.include(script, `while ! (set -C; printf '%s\\n' "$$" > "$T3_LOCK") 2>/dev/null; do`);
     assert.include(script, 'if ! kill -0 "$T3_LOCK_OWNER" 2>/dev/null; then');
     assert.include(script, 'if [ "$T3_LOCK_UNOWNED" -ge 5 ]; then');
     assert.include(script, 'if [ "$T3_LOCK_WAITED" -ge 360 ]; then');
@@ -132,17 +128,6 @@ describe("ssh tunnel scripts", () => {
       script.indexOf('exec node "$T3_NODE_SCRIPT_PATH" "$@"'),
       script.indexOf("T3_ARCHIVE_VERSION="),
     );
-
-    const launch = SshTunnel.buildRemoteLaunchScript({
-      ...ARCHIVE,
-      releaseBaseUrl: "https://mirror.example/t3/",
-    });
-    assert.include(launch, "T3_ARCHIVE_MODE=1");
-    assert.include(launch, "T3_RELEASE_BASE_URL='https://mirror.example/t3'");
-    assert.include(launch, '"$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE"');
-    assert.include(launch, '"$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT"');
-    assert.include(launch, '"$RUNNER_FILE" __ssh-helper runtime-port "$DEFAULT_RUNTIME_FILE"');
-    assert.include(SshTunnel.buildRemoteLaunchScript(NODE_SCRIPT), "T3_ARCHIVE_MODE=0");
   });
 
   it("rejects archive versions that are not a single exact version segment", () => {
@@ -175,9 +160,25 @@ describe("ssh tunnel scripts", () => {
       port: 2222,
     } as const;
     const spawnedCommands: Array<ReadonlyArray<string>> = [];
+    const launchScripts: string[] = [];
     const spawner = ChildProcessSpawner.make((command) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         spawnedCommands.push(commandArgs(command));
+        const stdin = command._tag === "StandardCommand" ? command.options.stdin : undefined;
+        if (stdin && typeof stdin === "object" && "stream" in stdin) {
+          const stream = stdin.stream;
+          if (typeof stream !== "string") {
+            launchScripts.push(
+              yield* stream.pipe(
+                Stream.decodeText(),
+                Stream.runFold(
+                  () => "",
+                  (body, chunk) => body + chunk,
+                ),
+              ),
+            );
+          }
+        }
         return makeSuccessfulProcess('loaded nvm default\n{"remotePort":3774}\n');
       }),
     );
@@ -185,9 +186,22 @@ describe("ssh tunnel scripts", () => {
     const layerProcess = Layer.merge(NodeServices.layer, layerSpawner);
 
     return Effect.gen(function* () {
-      const result = yield* SshTunnel.launchOrReuseRemoteServer(target, undefined, ARCHIVE);
+      const result = yield* SshTunnel.launchOrReuseRemoteServer(target, undefined, {
+        ...ARCHIVE,
+        releaseBaseUrl: "https://mirror.example/t3/",
+      });
       assert.equal(result.remotePort, 3774);
       assert.deepEqual(spawnedCommands[0]?.slice(-5, -1), ["sh", "-l", "-s", "--"]);
+      const launch = launchScripts[0]!;
+      assert.include(launch, "T3_ARCHIVE_MODE=1");
+      assert.include(launch, "T3_RELEASE_BASE_URL='https://mirror.example/t3'");
+      assert.include(launch, '"$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE"');
+      assert.include(launch, '"$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT"');
+      assert.include(launch, '"$RUNNER_FILE" __ssh-helper runtime-port "$DEFAULT_RUNTIME_FILE"');
+      yield* SshTunnel.launchOrReuseRemoteServer(target, undefined, {
+        nodeScriptPath: "/workspace/t3/src/bin.ts",
+      });
+      assert.include(launchScripts[1]!, "T3_ARCHIVE_MODE=0");
     }).pipe(Effect.provide(layerProcess));
   });
 

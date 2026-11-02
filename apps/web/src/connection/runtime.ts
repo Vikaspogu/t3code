@@ -18,6 +18,7 @@ import * as ConnectionPlatform from "./platform";
 const layerProvidedConnectionPlatform = ConnectionPlatform.layer.pipe(Layer.provide(Runtime.layer));
 
 function resolveRpcTransport(): "ws" | "http" {
+  if (typeof window === "undefined") return "ws";
   // Manual override for WebSocket-blocked environments (Android Prisma):
   // ?rpcTransport=http persists to localStorage so SPA navigation keeps it,
   // and ?rpcTransport=ws resets the stored choice. Without either, the
