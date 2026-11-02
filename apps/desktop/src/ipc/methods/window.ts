@@ -2,6 +2,7 @@ import {
   ContextMenuItemSchema,
   DesktopAppBrandingSchema,
   DesktopEnvironmentBootstrapSchema,
+  DesktopMediaReadSchema,
   DesktopThemeSchema,
   EDITORS,
   EditorId,
@@ -14,6 +15,7 @@ import {
   type PickedThemeFile,
 } from "@t3tools/contracts";
 import { PROJECT_FAVICON_EXTENSIONS } from "@t3tools/shared/projectFavicon";
+import { isPublicFaviconHost } from "@t3tools/shared/hostClassification";
 import { resolveEditorCommand } from "@t3tools/shared/editor";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { isRelayTracingEnabled } from "@t3tools/shared/otelEnvironment";
@@ -34,6 +36,7 @@ import * as DesktopWslEnvironment from "../../wsl/DesktopWslEnvironment.ts";
 import * as ElectronApp from "../../electron/ElectronApp.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../../electron/ElectronMenu.ts";
+import * as ElectronMediaSession from "../../electron/ElectronMediaSession.ts";
 import * as ElectronShell from "../../electron/ElectronShell.ts";
 import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
@@ -308,6 +311,55 @@ export const openExternal = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.openExternal")(function* (url) {
     const shell = yield* ElectronShell.ElectronShell;
     return yield* shell.openExternal(url);
+  }),
+});
+
+const READ_MEDIA_MAX_BYTES = 256 * 1024 * 1024;
+
+// Read public media blocked by CORS without exposing the session's private responses.
+export const readMedia = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.READ_MEDIA_CHANNEL,
+  payload: Schema.String,
+  result: Schema.NullOr(DesktopMediaReadSchema),
+  handler: Effect.fn("desktop.ipc.window.readMedia")(function* (url, event) {
+    const window = yield* (yield* ElectronWindow.ElectronWindow).main;
+    const parsedUrl = URL.parse(url);
+    if (
+      event === undefined ||
+      Option.isNone(window) ||
+      window.value.webContents.id !== event.sender.id ||
+      parsedUrl === null ||
+      !/^https?:$/.test(parsedUrl.protocol) ||
+      !isPublicFaviconHost(parsedUrl.hostname) ||
+      parsedUrl.username !== "" ||
+      parsedUrl.password !== ""
+    ) {
+      return null;
+    }
+    const session = yield* ElectronMediaSession.ElectronMediaSession;
+    return yield* Effect.tryPromise(async () => {
+      const response = await session.fetch(url, { credentials: "omit" });
+      const mimeType = response.headers.get("content-type") ?? "";
+      if (!response.ok || !response.body) {
+        await response.body?.cancel();
+        return { status: response.ok ? 502 : response.status, mimeType, data: new Uint8Array() };
+      }
+      if (!/^(?:image|audio|video)\//i.test(mimeType)) {
+        await response.body.cancel();
+        return { status: 415, mimeType, data: new Uint8Array() };
+      }
+      // The whole body crosses IPC, so stop before a huge file can exhaust main-process memory.
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for await (const chunk of response.body) {
+        size += chunk.byteLength;
+        if (size > READ_MEDIA_MAX_BYTES) {
+          return { status: 413, mimeType, data: new Uint8Array() };
+        }
+        chunks.push(chunk);
+      }
+      return { status: response.status, mimeType, data: Buffer.concat(chunks) };
+    }).pipe(Effect.orElseSucceed(() => null));
   }),
 });
 
