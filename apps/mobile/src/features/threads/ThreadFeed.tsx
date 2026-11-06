@@ -2298,6 +2298,12 @@ function renderFeedEntry(
                 sourceTitle={props.threadTitle}
               />
             ) : null}
+            {message.projectedItem ? (
+              <ActualModelChip
+                environmentId={props.environmentId}
+                projectedItem={message.projectedItem}
+              />
+            ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {timestampLabel}
             </Text>
@@ -2331,6 +2337,29 @@ function renderFeedEntry(
   );
 }
 
+function ActualModelChip(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+}) {
+  const support = useV2ItemSupport({
+    environmentId: props.environmentId,
+    sourceThreadId: props.projectedItem.sourceThreadId,
+    sourceItemId: props.projectedItem.sourceItemId,
+  });
+  const actualModel = support.providerTurn?.actualModel;
+  const modelSelection = support.run?.modelSelection;
+  if (actualModel == null || modelSelection === undefined || actualModel === modelSelection.model)
+    return null;
+  // ponytail: slug tail only — mobile has no provider-registry display lookup at this layer
+  const shortModel = (slug: string) => slug.slice(slug.indexOf("/") + 1);
+  return (
+    <Text className="font-t3-medium text-xs text-foreground-secondary">
+      <Text className="text-foreground-tertiary">{shortModel(modelSelection.model)}</Text>
+      {" → "}
+      {shortModel(actualModel)}
+    </Text>
+  );
+}
 function TurnDiffStat(props: {
   readonly checkpoint: ThreadCheckpointSummary;
   readonly onOpenTurnDiff: (checkpoint: ThreadCheckpointSummary) => void;

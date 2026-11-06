@@ -1182,6 +1182,8 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
+  /** Physical model that produced the turn, when a virtual model selection resolved to a different concrete model. */
+  actualModel: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
 

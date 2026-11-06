@@ -360,6 +360,7 @@ interface ActivePiTurn {
   latestCompactionAfterTokens: number | null;
   lastLiveUsedTokens: number | null;
   settleProbeGeneration: number;
+  actualModel: string | null;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;
   sawCompaction: boolean;
@@ -1559,6 +1560,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
             completedAt,
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
+            ...(turn.actualModel === null ||
+            turn.actualModel === turn.turnInput.modelSelection.model
+              ? {}
+              : { actualModel: turn.actualModel }),
           },
         });
         yield* updateProviderThread(
@@ -1786,6 +1791,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn === null) return;
             const message = event["message"];
             if (recordString(message, "role") !== "assistant") return;
+            const provider = recordString(message, "provider");
+            const modelId = recordString(message, "model");
+            if (provider !== undefined && modelId !== undefined)
+              turn.actualModel = `${provider}/${modelId}`;
             yield* completeOpenStreamItems(turn);
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
               turn.failure = makeProviderFailure({
@@ -2522,6 +2531,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               latestCompactionAfterTokens: null,
               lastLiveUsedTokens: null,
               settleProbeGeneration: 0,
+              actualModel: null,
               settleWhenIdle: false,
               sawCompaction: false,
               manualCompactInFlight: compactCommand !== null,

@@ -652,6 +652,90 @@ describe("PiAdapterV2", () => {
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("reports the physical model behind a virtual selection on the completed turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("pi/resilient"),
+        runtimePolicy,
+      });
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Hello pi",
+        modelSelection("pi/resilient"),
+      );
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          stopReason: "stop",
+          provider: "glm",
+          model: "glm-4.6",
+        },
+      });
+      fake.queueState({ isStreaming: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const completed = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+      );
+      assert.equal(
+        completed.type === "provider_turn.updated" && completed.providerTurn.actualModel,
+        "glm/glm-4.6",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("omits actualModel when the physical model matches the selection", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("glm/glm-4.6"),
+        runtimePolicy,
+      });
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Hello pi",
+        modelSelection("glm/glm-4.6"),
+      );
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          stopReason: "stop",
+          provider: "glm",
+          model: "glm-4.6",
+        },
+      });
+      fake.queueState({ isStreaming: false });
+      yield* fake.emit({ type: "agent_settled" });
+      const completed = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+      );
+      assert.isTrue(
+        completed.type !== "provider_turn.updated" ||
+          completed.providerTurn.actualModel === undefined,
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect.each([false, true])(
     "serializes rollback fork hooks with native wake ownership, wake=%s",
     (nativeWake) =>

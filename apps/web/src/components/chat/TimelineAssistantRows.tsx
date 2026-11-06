@@ -1,5 +1,8 @@
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import { type RunId } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import { EMPTY_SERVER_PROVIDERS, providersIgnoringCheckedAtAtom } from "../../state/server";
+import { getTriggerDisplayModelName } from "./providerIconUtils";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
@@ -155,6 +158,43 @@ export function AssistantMetaTimelineRow({
   );
 }
 
+function ActualModelChip({
+  projectedItem,
+}: {
+  readonly projectedItem: NonNullable<Extract<TimelineRow, { kind: "message" }>["projectedItem"]>;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const support = useV2ItemSupport({
+    environmentId: ctx.activeThreadEnvironmentId,
+    sourceThreadId: projectedItem.sourceThreadId,
+    sourceItemId: projectedItem.sourceItemId,
+  });
+  const providers =
+    useAtomValue(providersIgnoringCheckedAtAtom(ctx.activeThreadEnvironmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
+  const actualModel = support.providerTurn?.actualModel;
+  const modelSelection = support.run?.modelSelection;
+  if (actualModel == null || modelSelection === undefined || actualModel === modelSelection.model)
+    return null;
+  const provider = providers.find(
+    (candidate) => candidate.instanceId === modelSelection.instanceId,
+  );
+  const describe = (slug: string) => {
+    const model = provider?.models.find((candidate) => candidate.slug === slug);
+    return provider !== undefined && model !== undefined
+      ? getTriggerDisplayModelName(model, provider.driver)
+      : slug;
+  };
+  return (
+    <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+      <span className="opacity-60">{describe(modelSelection.model)}</span>
+      <span aria-hidden="true" className="px-0.5">
+        →
+      </span>
+      {describe(actualModel)}
+    </span>
+  );
+}
 function AssistantMessageMeta({
   className,
   projectedItem,
@@ -187,6 +227,7 @@ function AssistantMessageMeta({
           {projectedItem.item.status}
         </span>
       ) : null}
+      {projectedItem ? <ActualModelChip projectedItem={projectedItem} /> : null}
       <AssistantCopyButton
         message={message}
         showCopyButton={showCopyButton}
