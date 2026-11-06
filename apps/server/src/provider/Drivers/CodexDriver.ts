@@ -308,6 +308,48 @@ export const CodexDriver: ProviderDriver<
             ),
           );
 
+    const setSkillEnabled: NonNullable<ProviderInstance["setSkillEnabled"]> = ({
+      cwd,
+      name,
+      enabled,
+    }) =>
+      withCodexAppServerClient({
+        binaryPath: effectiveConfig.binaryPath,
+        homePath: effectiveConfig.homePath,
+        launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+        cwd,
+        environment: processEnv,
+      }).pipe(
+        Effect.flatMap(({ client }) =>
+          client.request("skills/config/write", {
+            enabled,
+            name,
+          }),
+        ),
+        Effect.scoped,
+        Effect.timeout("20 seconds"),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: `Failed to set Codex skill '${name}' for '${cwd}': ${String(cause)}`,
+              cause,
+            }),
+        ),
+        Effect.filterOrFail(
+          (response) => response.effectiveEnabled === enabled,
+          (response) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: `Codex reports '${name}' as still ${response.effectiveEnabled ? "enabled" : "disabled"} after the change.`,
+            }),
+        ),
+        Effect.asVoid,
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+
     // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
@@ -375,6 +417,7 @@ export const CodexDriver: ProviderDriver<
       enabled,
       snapshot,
       snapshotForCwd,
+      setSkillEnabled,
       consumeResetCredit,
       orchestrationAdapter,
       textGeneration,

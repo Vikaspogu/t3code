@@ -12,6 +12,33 @@ becomes an attachment when inserting it would exceed the message limit. On a
 hardware keyboard, use `Cmd+Shift+V` on Apple devices or `Ctrl+Shift+V` elsewhere
 to keep a large paste editable in the composer instead.
 
+## Voice calls
+
+Voice calls are experimental. Spoken updates can still stall. A coding request can take
+a few seconds to start when the assistant hands it off. Check the original thread before
+repeating a coding request.
+
+In this fork, open an existing Codex or Pi thread and choose the waveform button,
+**Start voice call**, in the composer. Allow microphone access. Keep the app open
+while you talk. Browser microphone access requires HTTPS or a local connection,
+and an enabled Codex account that supports voice handles speech and request
+routing, including in Pi threads.
+
+You can keep talking while an accepted coding task runs. Thread Details shows
+microphone state separately from coding progress. Fold **Conversation** to hide
+captions, or expand it to check recognized text. **Latest** returns to new captions
+when you are reading earlier messages. Voice uses the selected Codex account for
+conversation and request routing; routing can add a short delay before a task
+starts. Coding approvals still appear in the thread. A correction targets the current task.
+If that task has finished, say the instruction again as a new request.
+
+The call stays attached to its original thread when you navigate to another
+thread. **Mute** pauses microphone input. **End call**, also available beside the
+composer’s voice button, stops the call while accepted coding work continues.
+After the call ends, check the original thread for the task’s current status.
+Leaving the chat area or losing the connection ends the call. Start a new call to reconnect. Voice calls are available on web and desktop;
+mobile continues to use its existing composer.
+
 ## Formatting
 
 The composer writes Markdown and shows it styled as you type. Markers such as

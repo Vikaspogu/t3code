@@ -81,6 +81,7 @@ import { GlassSurface } from "../../components/ui/GlassSurface";
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import { fileRoutePathSegments } from "../files/filePath";
 import { ComposerActionButton, ComposerToolbarRow } from "../../components/ComposerToolbar";
+import { VoiceComposerButton } from "../orbit-voice/VoiceComposerButton";
 import { ComposerModelControl } from "../../components/ComposerModelControl";
 import {
   composerStripAttachments,
@@ -1080,6 +1081,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   compactEditor.isExpanded ? { flex: 1, justifyContent: "flex-end" } : undefined
                 }
               >
+                <VoiceComposerButton
+                  target={{
+                    environmentId: props.environmentId,
+                    threadId: props.selectedThread.id,
+                  }}
+                  providerInstanceId={currentModelSelection.instanceId}
+                />
                 {modelControl}
                 <ComposerDictationStartAction
                   size={usesLargeControls ? "large" : "regular"}
@@ -1148,6 +1156,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   onDismissError={voiceInput.cancel}
                 />
                 <View className="shrink-0 flex-row items-center">
+                  <VoiceComposerButton
+                    target={{
+                      environmentId: props.environmentId,
+                      threadId: props.selectedThread.id,
+                    }}
+                    providerInstanceId={currentModelSelection.instanceId}
+                  />
                   <ComposerDictationPrimaryAction
                     size={usesLargeControls ? "large" : "regular"}
                     state={voiceInput.state}

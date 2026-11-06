@@ -61,6 +61,7 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2PinnedShelfHeader,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
@@ -430,10 +431,12 @@ export function HomeScreen(props: HomeScreenProps) {
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
+    pinnedShelfExpanded,
     workingShelfExpanded,
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
+    togglePinnedShelf,
   } = useThreadListV2ShelfPreferences();
   const now = useThreadListNow(props.threads);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
@@ -473,6 +476,7 @@ export function HomeScreen(props: HomeScreenProps) {
     pendingOrder,
     shelfPreferencesLoaded,
     workingShelfEnabled,
+    pinnedShelfExpanded,
     workingShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
@@ -536,6 +540,17 @@ export function HomeScreen(props: HomeScreenProps) {
         />
       );
     }
+    if (item.type === "v2-pinned-shelf") {
+      return (
+        <ThreadListV2PinnedShelfHeader
+          count={item.count}
+          disabled={item.disabled}
+          expanded={item.expanded}
+          onToggle={togglePinnedShelf}
+          dot={item.dot}
+        />
+      );
+    }
     if (item.type === "v2-working-shelf") {
       return (
         <ThreadListV2WorkingShelfHeader
@@ -543,6 +558,7 @@ export function HomeScreen(props: HomeScreenProps) {
           disabled={item.disabled}
           expanded={item.expanded}
           onToggle={toggleWorkingShelf}
+          dot={item.dot}
         />
       );
     }
@@ -553,6 +569,7 @@ export function HomeScreen(props: HomeScreenProps) {
           disabled={item.disabled}
           expanded={item.expanded}
           onToggle={toggleSnoozedShelf}
+          dot={item.dot}
         />
       );
     }
@@ -563,6 +580,7 @@ export function HomeScreen(props: HomeScreenProps) {
           disabled={item.disabled}
           expanded={item.expanded}
           onToggle={toggleSettledShelf}
+          dot={item.dot}
         />
       );
     }

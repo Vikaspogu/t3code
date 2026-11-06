@@ -24,9 +24,13 @@ import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
 import { NETWORK_BLOCKING_HINT, UNRESPONSIVE_HOST_HINT } from "../errors/network.ts";
+import { httpRpcUrlFromSocketUrl } from "../connection/compatibility.ts";
 import type {
   ConnectionAttemptError,
   ConnectionTransientError,
@@ -62,6 +66,11 @@ export interface RpcSessionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
+  /**
+   * Speak the RPC protocol over the POST /rpc NDJSON endpoint instead of a
+   * WebSocket, for environments where the /ws upgrade never completes.
+   */
+  readonly transport?: "ws" | "http";
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -223,30 +232,54 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       });
       return socket;
     };
-    const layerSocket = Socket.layerWebSocket(connection.socketUrl, {
-      openTimeout: SOCKET_OPEN_TIMEOUT,
-    }).pipe(
-      Layer.provide(Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor)),
-    );
-    const layerProtocol = Layer.effect(
-      RpcClient.Protocol,
-      RpcClient.makeProtocolSocket({
-        pingTimeout: PING_TIMEOUT,
-        retryTransientErrors: false,
-        retryPolicy: Schedule.recurs(0),
-        onPingTimeout: Ref.set(pingTimedOut, true),
-      }),
-    ).pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          layerSocket,
-          RpcSerialization.layerJson,
-          Layer.succeed(RpcClient.ConnectionHooks, hooks),
-        ),
-      ),
-    );
+    const useHttpTransport = options.transport === "http";
+    // Prisma blocks WebSocket upgrades but permits NDJSON POSTs with the same authentication metadata.
+    // HTTP bearer sessions reuse a five-minute wsTicket; cookie authentication is checked on every POST.
+    const layerProtocol = useHttpTransport
+      ? RpcClient.layerProtocolHttp({
+          url: httpRpcUrlFromSocketUrl(connection.socketUrl),
+          // The HTTP protocol posts to `prependUrl(url)` with an empty
+          // request path, which normalizes to a trailing "/" and corrupts
+          // the last query param (e.g. orchestrationProtocol=2/). Strip
+          // trailing slashes before the request goes out.
+          transformClient: (client) =>
+            HttpClient.mapRequest(client, (request) =>
+              HttpClientRequest.updateUrl(request, (url) => url.replace(/\/+$/, "")),
+            ),
+        }).pipe(Layer.provide(Layer.mergeAll(RpcSerialization.layerNdjson, FetchHttpClient.layer)))
+      : Layer.effect(
+          RpcClient.Protocol,
+          RpcClient.makeProtocolSocket({
+            pingTimeout: PING_TIMEOUT,
+            retryTransientErrors: false,
+            retryPolicy: Schedule.recurs(0),
+            onPingTimeout: Ref.set(pingTimedOut, true),
+          }),
+        ).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Socket.layerWebSocket(connection.socketUrl, {
+                openTimeout: SOCKET_OPEN_TIMEOUT,
+              }).pipe(
+                Layer.provide(
+                  Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor),
+                ),
+              ),
+              RpcSerialization.layerJson,
+              Layer.succeed(RpcClient.ConnectionHooks, hooks),
+            ),
+          ),
+        );
+    if (useHttpTransport) {
+      // No connect/disconnect lifecycle over HTTP — the session counts as
+      // connected once the protocol layer builds; `ready` still gates on
+      // initialConfig, which performs the first real (authenticated) POST.
+      yield* Deferred.succeed(connected, undefined);
+    }
     const protocolContext = yield* Layer.build(layerProtocol).pipe(
-      Effect.withSpan("environment.websocket.connect"),
+      Effect.withSpan(
+        useHttpTransport ? "environment.rpc-http.connect" : "environment.websocket.connect",
+      ),
     );
     // Building the protocol only starts the socket; this span times the
     // handshake up to the first open, without making `connect` wait for it.

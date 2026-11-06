@@ -15,6 +15,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 
 import * as DesktopBackendPool from "./DesktopBackendPool.ts";
+import { DEFAULT_BACKEND_READINESS_TIMEOUT } from "./DesktopBackendManager.ts";
 
 const BOOTSTRAP_TRANSIENT_RETRY_TIMEOUT = Duration.seconds(15);
 const BOOTSTRAP_TRANSIENT_RETRY_INTERVAL = Duration.millis(500);
@@ -122,7 +123,13 @@ export const make = Effect.gen(function* () {
         return session.access_token;
       }),
     )
-    .pipe(Effect.withSpan("desktop.localEnvironmentAuth.getBearerToken"));
+    .pipe(
+      Effect.timeoutOrElse({
+        duration: DEFAULT_BACKEND_READINESS_TIMEOUT,
+        orElse: () => Effect.fail(new DesktopLocalEnvironmentAuthBackendNotConfiguredError()),
+      }),
+      Effect.withSpan("desktop.localEnvironmentAuth.getBearerToken"),
+    );
 
   return DesktopLocalEnvironmentAuth.of({ getBearerToken });
 });

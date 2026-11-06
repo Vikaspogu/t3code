@@ -31,6 +31,7 @@ import { useComposerResume } from "./chat/useComposerResume";
 import { useImplementPlanInNewThread } from "./chat/useProposedPlanSend";
 import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
+import { VoiceButton, VoiceCallBar } from "../features/orbit-voice/VoiceControls";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import { resolveDraftHeroState } from "./ChatView.logic";
@@ -3571,8 +3572,42 @@ export default function ChatView(props: ChatViewProps) {
                               }
                             />
                           ) : null}
+                          <VoiceCallBar
+                            target={{
+                              environmentId: activeThread.environmentId,
+                              threadId: activeThread.id,
+                            }}
+                            onOpen={() =>
+                              useRightPanelStore.getState().setThreadPanelOpen(
+                                {
+                                  environmentId: activeThread.environmentId,
+                                  threadId: activeThread.id,
+                                },
+                                threadPanelPresentation,
+                                true,
+                              )
+                            }
+                          />
                           {!composerMounted ? null : (
                             <ChatComposer
+                              voiceControls={
+                                <VoiceButton
+                                  target={{
+                                    environmentId: activeThread.environmentId,
+                                    threadId: activeThread.id,
+                                  }}
+                                  onOpen={() =>
+                                    useRightPanelStore.getState().setThreadPanelOpen(
+                                      {
+                                        environmentId: activeThread.environmentId,
+                                        threadId: activeThread.id,
+                                      },
+                                      threadPanelPresentation,
+                                      true,
+                                    )
+                                  }
+                                />
+                              }
                               canOperateThread={canOperateThread}
                               reportedModelSelection={reportedModelSelection}
                               multipleModelSelections={multipleModelSelections}

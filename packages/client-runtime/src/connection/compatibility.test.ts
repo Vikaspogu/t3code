@@ -7,6 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   appendOrchestrationProtocol,
+  httpRpcUrlFromSocketUrl,
   orchestrationProtocolCompatibilityError,
 } from "./compatibility.ts";
 
@@ -74,5 +75,31 @@ describe("orchestration protocol compatibility", () => {
         desktopAppUpdate: true,
       }),
     ).toMatchObject({ serverUpdateRequired: true });
+  });
+});
+
+describe("httpRpcUrlFromSocketUrl", () => {
+  it("rewrites scheme, path, and port while preserving auth and metadata params", () => {
+    const socketUrl =
+      "wss://host.test/ws?wsTicket=secret&clientSurface=web&connectionMethod=direct&orchestrationProtocol=2";
+    expect(httpRpcUrlFromSocketUrl(socketUrl)).toBe(
+      "https://host.test/rpc?wsTicket=secret&clientSurface=web&connectionMethod=direct&orchestrationProtocol=2",
+    );
+  });
+
+  it("handles ws scheme, explicit ports, and bare base URLs", () => {
+    expect(httpRpcUrlFromSocketUrl("ws://localhost:30142/ws?orchestrationProtocol=2")).toBe(
+      "http://localhost:30142/rpc?orchestrationProtocol=2",
+    );
+    expect(httpRpcUrlFromSocketUrl("wss://host.test/?orchestrationProtocol=2")).toBe(
+      "https://host.test/rpc?orchestrationProtocol=2",
+    );
+  });
+
+  it("handles path-prefixed socket URLs and rejects non-socket schemes", () => {
+    expect(httpRpcUrlFromSocketUrl("wss://host.test/prefix/ws?orchestrationProtocol=2")).toBe(
+      "https://host.test/prefix/rpc?orchestrationProtocol=2",
+    );
+    expect(() => httpRpcUrlFromSocketUrl("https://host.test/ws")).toThrow(/Not a socket URL/);
   });
 });

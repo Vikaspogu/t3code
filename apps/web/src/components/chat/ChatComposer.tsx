@@ -63,6 +63,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -347,6 +348,7 @@ export interface ChatComposerHandle {
 }
 
 export interface ChatComposerProps {
+  voiceControls?: ReactNode;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   canOperateThread: boolean;
@@ -3266,6 +3268,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     (showProviderUnavailable ? "Enable a provider in Settings" : "Ask anything...")}
                 </button>
                 {collapsedComposerImagePreviews}
+                {props.voiceControls}
                 <button
                   type="button"
                   data-chat-composer-transition-actions="true"
@@ -3493,6 +3496,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }
                   className="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2"
                 >
+                  {props.voiceControls}
                   <div
                     ref={attachExpandedComposerControls}
                     data-chat-composer-controls="footer"

@@ -34,6 +34,8 @@
         "sign-macos.ts",
         "prepare-server-compile-cache.cjs",
         "smoke-desktop-app.ts",
+        "smoke-cli-archive.ts",
+        "resolve-nightly-release.ts",
         "verify-windows-desktop-artifact.ts",
       ],
       "ignoreDependencies": ["agent-device", "esbuild"],
@@ -94,7 +96,11 @@
     "apps/web": {
       // Worktree setup (scripts/setup-worktree.ts) runs this directly, and evidence
       // fixtures run under node.
-      "entry": ["scripts/warm-dep-cache.ts", "test/fixtures/**/*.mjs"],
+      "entry": [
+        "scripts/warm-dep-cache.ts",
+        "scripts/verify-built-boot.ts",
+        "test/fixtures/**/*.mjs",
+      ],
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
@@ -117,6 +123,8 @@
       // Fonts are configured as asset paths; Expo autolinks the native packages.
       "ignoreDependencies": [
         "@expo-google-fonts/dm-sans",
+        // The shared voice adapter loads this mobile-autolinked module lazily.
+        "react-native-webrtc",
         "@t3tools/mobile-highlights-native",
         "@t3tools/mobile-review-diff-native",
         "@t3tools/mobile-terminal-native",

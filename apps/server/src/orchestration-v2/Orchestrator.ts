@@ -4670,6 +4670,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly idleCompaction?: OrchestrationV2ConversationMessage["idleCompaction"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
     readonly forceRestart: boolean;
+    readonly strictTarget?: boolean;
   }) {
     const targetRun = input.projection.runs.find((candidate) => candidate.id === input.targetRunId);
     if (targetRun === undefined) {
@@ -4778,6 +4779,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const now = yield* DateTime.now;
     const emitEvent = emit(input.events, input.command);
     const selectionChanged = !modelSelectionsEqual(targetRun.modelSelection, input.modelSelection);
+    if (
+      input.strictTarget === true &&
+      (selectionChanged ||
+        !modelSelectionsEqual(input.projection.thread.modelSelection, input.modelSelection))
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: input.command.commandId,
+        commandType: input.command.type,
+        cause: "Strict steering cannot change the run or thread model selection.",
+      });
+    }
     const providerInstanceChanged =
       targetRun.providerInstanceId !== input.modelSelection.instanceId;
     const selectionTransition =
@@ -4915,6 +4927,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }),
     );
 
+    if (input.strictTarget === true && steeringPolicy !== "active_steering") {
+      return yield* new OrchestratorDispatchError({
+        commandId: input.command.commandId,
+        commandType: input.command.type,
+        cause: "Strict steering requires delivery to the active provider turn without restart.",
+      });
+    }
+
     if (steeringPolicy === "active_steering") {
       const instanceChanged =
         input.projection.thread.providerInstanceId !== input.modelSelection.instanceId;
@@ -4951,6 +4971,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: input.command.threadId,
           request: {
             type: "provider-turn.steer",
+            ...(input.strictTarget === true ? { strictTarget: true } : {}),
             providerSessionId,
             providerThreadId: providerThread.id,
             providerTurnId: providerTurn.id,
@@ -5581,6 +5602,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projection = applyToProjection(projection, event);
     }
     const modelSelection = command.modelSelection ?? projection.thread.modelSelection;
+    if (
+      command.dispatchMode.type === "steer_active" &&
+      command.dispatchMode.strictTarget === true &&
+      command.deliveryIntent !== undefined
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Strict steering cannot use an untargeted delivery intent.",
+      });
+    }
     let dispatchMode = resolveMessageDispatchIntent(
       projection,
       command.dispatchMode,
@@ -5602,6 +5634,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             turn !== undefined &&
             turn.status === "completed"))
       ) {
+        if (dispatchMode.strictTarget === true) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The strict steering target has already completed.",
+          });
+        }
         dispatchMode = { type: "start_immediately" };
       }
     }
@@ -5824,6 +5863,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : { scheduledTaskId: command.scheduledTaskId }),
         ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
         ...(command.idleCompaction === undefined ? {} : { idleCompaction: command.idleCompaction }),
+        ...(dispatchMode.type === "steer_active" && dispatchMode.strictTarget === true
+          ? { strictTarget: true }
+          : {}),
         forceRestart: dispatchMode.type === "restart_active",
       });
       return;

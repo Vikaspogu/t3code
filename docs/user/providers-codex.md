@@ -99,6 +99,13 @@ when it resets, when Codex reports them. Send the message again after the reset.
 message also says whether your workspace owner needs to add credits or raise the
 spend limit to continue sooner.
 
+## Skills
+
+Settings → Providers → a Codex instance → **Skills & prompts** lists every
+skill the instance discovered for a workspace, and the switch next to each one
+turns it on or off through Codex's own skills configuration. The change takes
+effect from the next turn, with no restart.
+
 ## Send feedback to OpenAI
 
 In an existing Codex thread, send `/feedback` with an optional description, for

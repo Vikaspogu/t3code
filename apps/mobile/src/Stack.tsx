@@ -55,6 +55,7 @@ import {
   HardwareKeyboardCommandOverlay,
   HardwareKeyboardCommandProvider,
 } from "./features/keyboard/HardwareKeyboardCommandProvider";
+import { VoiceSheetScreen } from "./features/orbit-voice/VoiceSheetScreen";
 import { ReviewCommentComposerSheet } from "./features/review/ReviewCommentComposerSheet";
 import { ReviewSheet } from "./features/review/ReviewSheet";
 import { ThreadTerminalRouteScreen } from "./features/terminal/ThreadTerminalRouteScreen";
@@ -843,6 +844,14 @@ const RootStackConfig = createWorkspaceStackNavigator({
           : HORIZONTAL_FORM_SHEET_OPTIONS),
         sheetAllowedDetents: Platform.OS === "android" ? undefined : formSheetDetents(0.55),
         sheetGrabberVisible: Platform.OS !== "android",
+      },
+    }),
+    ThreadVoice: createNativeStackScreen({
+      screen: VoiceSheetScreen,
+      linking: `${THREAD_LINKING_PREFIX}/voice`,
+      options: {
+        ...HORIZONTAL_FORM_SHEET_OPTIONS,
+        title: "Voice",
       },
     }),
     ThreadFiles: createNativeStackScreen({

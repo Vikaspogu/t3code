@@ -85,9 +85,19 @@ describe("DesktopLocalEnvironmentAuth", () => {
 
       const [first, second] = yield* Effect.gen(function* () {
         const auth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth;
-        const tokens = yield* Effect.all([auth.getBearerToken, auth.getBearerToken]).pipe(
-          Effect.forkChild,
-        );
+        const blocked = yield* Effect.all(
+          [auth.getBearerToken.pipe(Effect.flip), auth.getBearerToken.pipe(Effect.flip)],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(waiting);
+        yield* TestClock.adjust(Duration.minutes(3));
+        assert.isDefined(blocked.pollUnsafe());
+        for (const error of yield* Fiber.join(blocked)) {
+          assert.strictEqual(error._tag, "DesktopLocalEnvironmentAuthBackendNotConfiguredError");
+        }
+        const tokens = yield* Effect.all([auth.getBearerToken, auth.getBearerToken], {
+          concurrency: "unbounded",
+        }).pipe(Effect.forkChild);
         yield* Deferred.await(waiting);
         yield* TestClock.adjust(Duration.seconds(16));
         assert.strictEqual(yield* Ref.get(requestCount), 0);

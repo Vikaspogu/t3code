@@ -8,6 +8,7 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { resolveThreadRouteTarget, type ThreadRouteTarget } from "../threadRoutes";
 import { retainThreadFindForRoute } from "../components/chat/threadFindStore";
 import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
+import { VoiceProvider } from "../features/orbit-voice/VoiceProvider";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 
 function threadRouteTargetKey(target: ThreadRouteTarget | null) {
@@ -29,7 +30,7 @@ function ChatRouteLayout() {
   }
   const shownTarget = modalOpen ? backgroundTarget : threadTarget;
   return (
-    <>
+    <VoiceProvider showFallback={!shownTarget}>
       {shownTarget?.kind === "server" && !modalOpen ? (
         <ThreadLinkPrompt threadRef={shownTarget.threadRef} />
       ) : null}
@@ -41,7 +42,7 @@ function ChatRouteLayout() {
         <Outlet />
       )}
       {modalOpen ? <Outlet /> : null}
-    </>
+    </VoiceProvider>
   );
 }
 

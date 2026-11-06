@@ -22,6 +22,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { VoicePanel } from "../../features/orbit-voice/VoiceControls";
 import { ThreadServersPanel } from "./ThreadServersPanel";
 import {
   ThreadDetailsContext,
@@ -161,6 +162,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         };
         return (
           <>
+            <VoicePanel target={{ environmentId: props.environmentId, threadId: props.threadId }} />
             <div className="group/details-items">
               {show.environment || show.openIn || show.scripts ? (
                 <ThreadDetailsSection

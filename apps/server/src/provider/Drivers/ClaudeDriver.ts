@@ -26,6 +26,7 @@ import { claudeUsageReader } from "./claudeUsage.ts";
 import { makeClaudeScopedLimitNames } from "../claudeUsageLimits.ts";
 import * as ClaudeResetCredits from "../claudeResetCredits.ts";
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
+import { setClaudeSkillEnabled } from "./ClaudeSkills.ts";
 import {
   checkClaudeProviderStatus,
   makePendingClaudeProvider,
@@ -405,6 +406,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         ),
+      setSkillEnabled: ({ cwd, name, enabled }) =>
+        setClaudeSkillEnabled(effectiveConfig, cwd, name, enabled, processEnv).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail: cause.reason,
+                cause,
+              }),
+          ),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        ),
+
       orchestrationAdapter,
       textGeneration,
       consumeResetCredit,

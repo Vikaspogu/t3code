@@ -70,6 +70,7 @@ import { SidebarNavigationShell } from "./sidebar-navigation-shell";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2PinnedShelfHeader,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
@@ -279,10 +280,12 @@ function ThreadNavigationSidebarPane(
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
+    pinnedShelfExpanded,
     workingShelfExpanded,
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
+    togglePinnedShelf,
   } = useThreadListV2ShelfPreferences();
   const now = useThreadListNow(threads);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
@@ -322,6 +325,7 @@ function ThreadNavigationSidebarPane(
     pendingOrder,
     shelfPreferencesLoaded,
     workingShelfEnabled,
+    pinnedShelfExpanded,
     workingShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
@@ -622,6 +626,17 @@ function ThreadNavigationSidebarPane(
           />
         );
       }
+      case "v2-pinned-shelf":
+        return (
+          <ThreadListV2PinnedShelfHeader
+            count={item.count}
+            disabled={item.disabled}
+            expanded={item.expanded}
+            onToggle={togglePinnedShelf}
+            dot={item.dot}
+            pane="sidebar"
+          />
+        );
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader
@@ -629,6 +644,7 @@ function ThreadNavigationSidebarPane(
             disabled={item.disabled}
             expanded={item.expanded}
             onToggle={toggleWorkingShelf}
+            dot={item.dot}
             pane="sidebar"
           />
         );
@@ -639,6 +655,7 @@ function ThreadNavigationSidebarPane(
             disabled={item.disabled}
             expanded={item.expanded}
             onToggle={toggleSnoozedShelf}
+            dot={item.dot}
             pane="sidebar"
           />
         );
@@ -649,6 +666,7 @@ function ThreadNavigationSidebarPane(
             disabled={item.disabled}
             expanded={item.expanded}
             onToggle={toggleSettledShelf}
+            dot={item.dot}
             pane="sidebar"
           />
         );

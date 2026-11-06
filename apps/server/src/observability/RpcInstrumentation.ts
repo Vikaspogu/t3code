@@ -11,6 +11,11 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  [WS_METHODS.orbitVoiceStart]: "orbitVoice",
+  [WS_METHODS.orbitVoiceSubmit]: "orbitVoice",
+  [WS_METHODS.orbitVoiceEnd]: "orbitVoice",
+  [WS_METHODS.orbitVoiceRenewPresence]: "orbitVoice",
+  [WS_METHODS.orbitVoiceSnapshot]: "orbitVoice",
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: "orchestration",
@@ -39,6 +44,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverUpdateProvider]: "server",
   [WS_METHODS.providerAuthStart]: "provider",
   [WS_METHODS.providerConsumeResetCredit]: "provider",
+  [WS_METHODS.providerSetSkillEnabled]: "provider",
+  [WS_METHODS.providerGetRuntimeInstructions]: "provider",
   [WS_METHODS.providerAuthComplete]: "provider",
   [WS_METHODS.chatGptReconnectProfile]: "provider",
   [WS_METHODS.chatGptImportProfile]: "provider",

@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
@@ -44,12 +45,17 @@ it.effect.each(
       [true, "settled only"],
       [false, "during continuation"],
     ] as const
-  ).map(([mailbox, timing]) => ({
-    mailbox,
-    timing,
-    label: mailbox ? "mailbox notification" : "steering",
-  })),
-)("delivers $label when completion wins $timing", ({ mailbox, timing }) =>
+  )
+    .map(([mailbox, timing]) => ({
+      mailbox,
+      timing,
+      label: mailbox ? "mailbox notification" : "steering",
+    }))
+    .flatMap((entry) => [
+      { ...entry, strictTarget: false },
+      ...(entry.mailbox ? [] : [{ ...entry, strictTarget: true, label: "strict steering" }]),
+    ]),
+)("delivers $label when completion wins $timing", ({ mailbox, timing, strictTarget }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const cwd = yield* checkpointWorkspace(`steering-completion-${timing.replaceAll(" ", "-")}`);
@@ -58,6 +64,7 @@ it.effect.each(
       const steerEntered = yield* Deferred.make<void>();
       const rejectSteer = yield* Deferred.make<void>();
       let steerCalls = 0;
+      const steeredTurns: ProviderTurnId[] = [];
       const capabilities = {
         ...CodexProviderCapabilitiesV2,
         turns: {
@@ -136,6 +143,7 @@ it.effect.each(
               steerTurn: (turn) =>
                 Effect.gen(function* () {
                   steerCalls += 1;
+                  steeredTurns.push(turn.providerTurnId);
                   if (timing === "after delivery" || timing === "during continuation") return;
                   yield* Deferred.succeed(steerEntered, undefined);
                   yield* Deferred.await(rejectSteer);
@@ -271,7 +279,7 @@ it.effect.each(
           ],
           dispatchMode: mailbox
             ? { type: "queue_after_active" }
-            : { type: "steer_active", targetRunId: first.runId },
+            : { type: "steer_active", targetRunId: first.runId, strictTarget },
           createdBy: mailbox ? "agent" : "user",
           creationSource: mailbox ? "server" : "web",
           ...(mailbox
@@ -343,14 +351,89 @@ it.effect.each(
           const item = requeued.turnItems.find(
             (item) => item.type === "user_message" && item.messageId === messageId,
           );
-          assert.equal(item?.status, "pending");
-          assert.isNull(item?.startedAt);
-          assert.isNull(item?.completedAt);
+          if (!strictTarget) {
+            assert.equal(item?.status, "pending");
+            assert.isNull(item?.startedAt);
+            assert.isNull(item?.completedAt);
+          }
+        }
+        if (timing === "before dispatch" && strictTarget) {
+          yield* worker.drain();
+          const result = yield* Effect.result(dispatchSteer);
+          assert.equal(result._tag, "Failure");
+          const final = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(started.length, 1);
+          assert.lengthOf(final.runs, 1);
+          assert.isFalse(final.messages.some((message) => message.id === messageId));
+          const nextRunning = yield* watch(
+            (event) => event.type === "provider-turn.updated" && event.payload.status === "running",
+          );
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("next"),
+            threadId,
+            messageId: MessageId.make("message:next"),
+            text: "next task",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* worker.drain();
+          yield* Fiber.join(nextRunning);
+          const stale = yield* Effect.result(
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("stale-target"),
+              threadId,
+              messageId,
+              text: "old correction",
+              attachments: [],
+              dispatchMode: { type: "steer_active", targetRunId: first.runId, strictTarget: true },
+              createdBy: "user",
+              creationSource: "web",
+            }),
+          );
+          assert.equal(stale._tag, "Failure");
+          yield* worker.drain();
+          assert.equal(started.length, 2);
+          assert.equal(steerCalls, 0);
+          const unchanged = yield* orchestrator.getThreadProjection(threadId);
+          assert.lengthOf(unchanged.runs, 2);
+          assert.isFalse(unchanged.messages.some((message) => message.id === messageId));
+          return;
         }
         if (timing === "before dispatch") yield* dispatchSteer;
         yield* worker.drain();
         yield* orchestrator.resumeQueuedRuns;
         yield* worker.drain();
+        if (strictTarget) {
+          if (timing !== "after delivery") {
+            for (const delay of [100, 200, 400, 800]) {
+              yield* TestClock.adjust(delay);
+              yield* worker.drain();
+            }
+          }
+          assert.equal(started.length, 1);
+          const final = yield* orchestrator.getThreadProjection(threadId);
+          assert.lengthOf(final.runs, 1);
+          assert.equal(
+            final.messages.find((message) => message.id === messageId)?.runId,
+            first.runId,
+          );
+          assert.equal(
+            final.turnItems.find(
+              (item) => item.type === "user_message" && item.messageId === messageId,
+            )?.providerTurnId,
+            turn.id,
+          );
+          assert.deepEqual(steeredTurns, [turn.id]);
+          yield* dispatchSteer;
+          yield* worker.drain();
+          assert.equal(started.length, 1);
+          assert.equal(steerCalls, 1);
+          return;
+        }
         if (timing === "after delivery") {
           assert.equal(steerCalls, 1);
           assert.equal(started.length, 1);
@@ -944,6 +1027,68 @@ it.effect("starts a steer that missed the turn on the saved next-turn selection"
   ),
 );
 
+it.effect.each(["selection", "saved selection", "restart", "delivery intent"] as const)(
+  "rejects strict steering when %s would change the target execution",
+  (change) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          `strict-steering-${change.replaceAll(" ", "-")}`,
+          change === "restart",
+          change !== "restart",
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          if (change === "saved selection") {
+            const sink = yield* EventSink.EventSinkV2;
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            yield* sink.write({
+              events: [
+                {
+                  id: EventId.make("changed-selection"),
+                  type: "thread.model-selection-updated",
+                  threadId,
+                  occurredAt: yield* DateTime.now,
+                  payload: { ...projection.thread, modelSelection: composerSelection },
+                },
+              ],
+            });
+          }
+          const before = yield* orchestrator.getThreadProjection(threadId);
+          const result = yield* Effect.result(
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("strict"),
+              threadId,
+              messageId: MessageId.make("message:strict"),
+              text: "correction",
+              attachments: [],
+              modelSelection: change === "selection" ? composerSelection : runSelection,
+              dispatchMode: {
+                type: "steer_active",
+                targetRunId: started[0]!.runId,
+                strictTarget: true,
+              },
+              ...(change === "delivery intent" ? { deliveryIntent: "auto" as const } : {}),
+              createdBy: "user",
+              creationSource: "web",
+            }),
+          );
+          assert.equal(result._tag, "Failure");
+          yield* worker.drain();
+          const after = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(after.messages, before.messages);
+          assert.deepEqual(after.runs, before.runs);
+          assert.deepEqual(after.attempts, before.attempts);
+          assert.deepEqual(after.thread.modelSelection, before.thread.modelSelection);
+          assert.equal(started.length, 1);
+          assert.lengthOf(steered, 0);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
 // regression: #26695 cancelling a Copilot prompt to steer it kills its background agents
 it.effect("queues a steer until the turn ends when the provider cannot steer it", () =>
   Effect.scoped(

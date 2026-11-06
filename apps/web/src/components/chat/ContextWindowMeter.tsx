@@ -33,10 +33,13 @@ export function ContextWindowMeter(props: {
   const dashOffset = circumference * (1 - normalizedPercentage / 100);
   const totalProcessedTokens = usage.totalProcessedTokens ?? null;
   const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
-  const isOverloaded = normalizedPercentage > 90;
-  const usageColor = isOverloaded
-    ? "var(--color-error)"
-    : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
+  // ACP context-pressure thresholds: gentle nudge at 55%, emergency at 75%
+  const usageColor =
+    normalizedPercentage >= 75
+      ? "var(--color-error)"
+      : normalizedPercentage >= 55
+        ? "var(--color-warning)"
+        : "var(--color-success)";
 
   return (
     <Popover>

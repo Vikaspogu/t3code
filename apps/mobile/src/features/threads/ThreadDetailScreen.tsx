@@ -206,6 +206,7 @@ import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
+import { VoiceCallBar } from "../orbit-voice/VoiceCallBar";
 
 export interface ThreadDetailScreenProps {
   readonly header?: React.ReactNode;
@@ -401,6 +402,18 @@ function ThreadDetailBody(
   const deviceState = useEnvironmentQuery(
     deviceEnvironment.state({ environmentId: props.environmentId, input: {} }),
   );
+  const openVoiceSheet = useCallback(() => {
+    navigation.navigate("ThreadVoice", {
+      environmentId: props.environmentId,
+      threadId: props.selectedThread.id,
+      providerInstanceId: reportedModelSelection?.instanceId ?? undefined,
+    });
+  }, [
+    navigation,
+    props.environmentId,
+    props.selectedThread.id,
+    reportedModelSelection?.instanceId,
+  ]);
   const devicePreviews = threadDevicePreviews(deviceState.data, props.selectedThread.id);
   const openDevicePreview = () => {
     Keyboard.dismiss();
@@ -1743,6 +1756,14 @@ function ThreadDetailBody(
                     </View>
                   ) : (
                     <>
+                      <VoiceCallBar
+                        target={{
+                          environmentId: props.environmentId,
+                          threadId: props.selectedThread.id,
+                        }}
+                        providerInstanceId={reportedModelSelection?.instanceId ?? undefined}
+                        onOpenSheet={openVoiceSheet}
+                      />
                       <ThreadComposer
                         isDraft={Boolean(props.draftMode)}
                         canOperateThread={props.canOperateThread}

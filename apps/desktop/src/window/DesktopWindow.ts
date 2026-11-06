@@ -202,6 +202,30 @@ export function isSameOriginRendererNavigation(input: {
   }
 }
 
+// Mic/camera access for the main window session (voice calls). Chromium grants
+// "media" to everything unless we gate it; only our own origin gets the mic,
+// and `securityOrigin` wins because a sandboxed same-origin frame has an
+// opaque ("null") security origin despite keeping its URL.
+function isMainAppMediaPermissionOrigin(input: {
+  readonly applicationUrl: string;
+  readonly securityOrigin?: string | undefined;
+  readonly requestingUrl?: string | undefined;
+}): boolean {
+  // Note: not `.origin` — custom schemes (t3code-dev://) parse to opaque
+  // ("null") origins in WHATWG URL, but Chromium still reports a real
+  // securityOrigin for them. protocol//host is the origin tuple for both
+  // special and custom schemes.
+  const originKey = (url: string): string | null => {
+    try {
+      const parsed = new URL(url);
+      return parsed.host ? `${parsed.protocol}//${parsed.host}` : null;
+    } catch {
+      return null;
+    }
+  };
+  const candidate = originKey(input.securityOrigin ?? input.requestingUrl ?? "");
+  return candidate !== null && candidate === originKey(input.applicationUrl);
+}
 function isRetryableDevelopmentRendererLoadFailure(input: {
   readonly applicationUrl: string;
   readonly errorCode: number;
@@ -360,6 +384,29 @@ export const make = Effect.gen(function* () {
     if (yield* Ref.get(desktopState.quitting)) return Option.none();
     yield* previewManager.getBrowserSession();
     const applicationUrl = getDesktopUrl(environment.isDevelopment);
+    // Gate mic/camera (voice calls) to our own renderer origin. Every other
+    // permission keeps Electron's default-grant: the app already relies on it
+    // for notifications, clipboard, local-fonts, display-capture, fullscreen.
+    Electron.session.defaultSession.setPermissionRequestHandler(
+      (_webContents, permission, callback, details) => {
+        if (permission !== "media") {
+          callback(true);
+          return;
+        }
+        callback(
+          isMainAppMediaPermissionOrigin({
+            applicationUrl,
+            securityOrigin: "securityOrigin" in details ? details.securityOrigin : undefined,
+            requestingUrl: details.requestingUrl,
+          }),
+        );
+      },
+    );
+    Electron.session.defaultSession.setPermissionCheckHandler(
+      (_webContents, permission, requestingOrigin) =>
+        permission !== "media" ||
+        isMainAppMediaPermissionOrigin({ applicationUrl, securityOrigin: requestingOrigin }),
+    );
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths, environment.platform);
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;

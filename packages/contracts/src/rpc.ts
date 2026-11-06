@@ -34,6 +34,7 @@ import {
   ChatGptHandoffState,
 } from "./providerSetup.ts";
 import * as Schema from "effect/Schema";
+import { ORBIT_VOICE_METHODS, OrbitVoiceRpcs } from "./orbitVoice.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -317,6 +318,10 @@ import {
   ServerPrepareTriageResult,
   OtlpEndpointCheckResult,
   ServerConfig,
+  ServerProviderRuntimeInstructions,
+  ServerProviderRuntimeInstructionsInput,
+  ServerProviderSetSkillEnabledInput,
+  ServerProviderSkillError,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -406,6 +411,7 @@ import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
+  ...ORBIT_VOICE_METHODS,
   projectsListEntries: "projects.listEntries",
   projectsListIgnoredFiles: "projects.listIgnoredFiles",
   projectsReadFile: "projects.readFile",
@@ -434,6 +440,8 @@ export const WS_METHODS = {
   mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
 
   providerUploadFeedback: "provider.uploadFeedback",
+  providerSetSkillEnabled: "provider.setSkillEnabled",
+  providerGetRuntimeInstructions: "provider.getRuntimeInstructions",
   providerAuthStart: "provider.auth.start",
   providerConsumeResetCredit: "provider.consumeResetCredit",
   providerAuthComplete: "provider.auth.complete",
@@ -663,6 +671,18 @@ const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([ServerProviderUpdateError, EnvironmentAuthorizationError]),
+});
+
+const WsProviderSetSkillEnabledRpc = Rpc.make(WS_METHODS.providerSetSkillEnabled, {
+  payload: ServerProviderSetSkillEnabledInput,
+  success: ServerProviderUpdatedPayload,
+  error: Schema.Union([ServerProviderSkillError, EnvironmentAuthorizationError]),
+});
+
+const WsProviderGetRuntimeInstructionsRpc = Rpc.make(WS_METHODS.providerGetRuntimeInstructions, {
+  payload: ServerProviderRuntimeInstructionsInput,
+  success: ServerProviderRuntimeInstructions,
+  error: EnvironmentAuthorizationError,
 });
 
 const ProviderSetupRpcError = Schema.Union([ProviderSetupError, EnvironmentAuthorizationError]);
@@ -1980,11 +2000,14 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 ) {}
 
 export const WsRpcGroup = RpcGroup.make(
+  ...OrbitVoiceRpcs,
   WsGuestShareCreateRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
+  WsProviderSetSkillEnabledRpc,
+  WsProviderGetRuntimeInstructionsRpc,
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,
   WsProviderAuthCompleteRpc,

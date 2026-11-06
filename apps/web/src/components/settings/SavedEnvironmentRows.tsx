@@ -217,7 +217,7 @@ export function SavedBackendListRow({
     environmentTransportLabel(environment, connectedTarget),
     // The headline below names the failure in full.
     diagnosis ? null : resumingServerUpdate ? "Restarting" : status.text,
-    enabled && versionMismatch ? serverVersion : null,
+    serverVersion,
   ]
     .filter((value): value is string => value !== null)
     .join(" · ");

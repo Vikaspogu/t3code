@@ -1,4 +1,5 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import * as OrbitVoiceCalls from "./orbit-voice/VoiceCalls.ts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -76,6 +77,7 @@ import {
   ProjectMutationError,
   ProviderUploadFeedbackError,
   ProviderSetupError,
+  ServerProviderSkillError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   type ServerConfig as ClientServerConfig,
@@ -169,6 +171,7 @@ import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
+import { providerRuntimeInstructionsForDriver } from "./provider/RuntimeInstructions.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
@@ -599,7 +602,7 @@ function projectFileFailureContext(
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
-const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+export const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
 
 // RpcGroup.toLayer derives each handler's requirements by scanning every RPC in
 // the group, so its type cost grows with handlers × RPCs. Near 200 methods that
@@ -674,7 +677,7 @@ const MAX_CLIENT_APP_VERSION_LENGTH = 64;
 const MAX_CLIENT_BROWSER_LENGTH = 64;
 const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
 
-function hasCompatibleOrchestrationProtocol(url: URL): boolean {
+export function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   return (
     url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM) ===
     String(ORCHESTRATION_PROTOCOL_VERSION)
@@ -688,8 +691,9 @@ function shouldUseBoundedThreadSnapshot(input: {
   return input.acceptBoundedSnapshot === true;
 }
 
-// Keep telemetry per socket; several client types can connect simultaneously.
-function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
+// Client telemetry stays in this socket's RPC layer. It must not become a
+// server-global "current client" because several client types can connect at once.
+export function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
   const url = HttpServerRequest.toURL(request);
   if (Option.isNone(url)) {
     return {};
@@ -737,7 +741,7 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
  * Owners a connecting client reports: its hashed T3 Connect account and its
  * hashed device id. Only hashes are accepted, so a raw id never reaches analytics.
  */
-function readClientOwners(
+export function readClientOwners(
   request: HttpServerRequest.HttpServerRequest,
 ): ReadonlyArray<TelemetryOwner> {
   const url = HttpServerRequest.toURL(request);
@@ -1270,6 +1274,7 @@ export const layerWsRpc = (
   Layer.effectContext(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const orbitVoice = yield* OrbitVoiceCalls.VoiceCalls;
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const intakeContext = yield* Effect.context<
@@ -1912,6 +1917,13 @@ export const layerWsRpc = (
       });
 
       const handlers = ServerWsRpcGroup.of({
+        [WS_METHODS.orbitVoiceStart]: (input) => orbitVoice.start(currentSessionId, input),
+        [WS_METHODS.orbitVoiceSubmit]: (input) => orbitVoice.submit(currentSessionId, input),
+        [WS_METHODS.orbitVoiceEnd]: (input) => orbitVoice.end(currentSessionId, input.callId),
+        [WS_METHODS.orbitVoiceRenewPresence]: (input) =>
+          orbitVoice.renewPresence(currentSessionId, input.callId),
+        [WS_METHODS.orbitVoiceSnapshot]: (input) =>
+          orbitVoice.snapshot(currentSessionId, input.callId, input.afterSequence),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -2482,6 +2494,47 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           providerMaintenanceRunner.updateProvider(input),
+        [WS_METHODS.providerSetSkillEnabled]: Effect.fn("provider.setSkillEnabled")(
+          function* (input) {
+            const instance = yield* providerInstances.getInstance(input.instanceId);
+            if (instance === undefined || instance.setSkillEnabled === undefined) {
+              return yield* new ServerProviderSkillError({
+                instanceId: input.instanceId,
+                reason:
+                  instance === undefined
+                    ? `Provider instance ${input.instanceId} was not found.`
+                    : "This provider does not support toggling skills.",
+              });
+            }
+            yield* instance
+              .setSkillEnabled({
+                cwd: input.cwd,
+                name: input.name,
+                enabled: input.enabled,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerProviderSkillError({
+                      instanceId: input.instanceId,
+                      reason: cause.detail,
+                    }),
+                ),
+              );
+            // Return the rescanned snapshot so clients see the new state
+            // without a separate refresh call. Codex resolves skills per
+            // workspace, so it needs a fresh probe of that cwd; other drivers
+            // re-read cheap local state instead of respawning their CLI.
+            const providers = yield* providerRegistry.refreshWorkspaceSnapshot({
+              instanceId: input.instanceId,
+              cwd: input.cwd,
+              fresh: instance.driverKind === "codex",
+            });
+            return { providers };
+          },
+        ),
+        [WS_METHODS.providerGetRuntimeInstructions]: (input) =>
+          Effect.succeed(providerRuntimeInstructionsForDriver(input.driver)),
         [WS_METHODS.providerConsumeResetCredit]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {

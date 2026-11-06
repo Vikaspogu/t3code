@@ -1,4 +1,8 @@
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as OrbitVoiceCalls from "./orbit-voice/VoiceCalls.ts";
+import * as OrbitNativeVoice from "./orbit-voice/NativeVoice.ts";
+import * as OrbitT3Host from "./orbit-voice/T3Host.ts";
+import * as OrbitRuntimeAccess from "./orbit-voice/RuntimeAccess.ts";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
@@ -34,6 +38,7 @@ import {
 } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import * as Ws from "./ws.ts";
+import * as RpcHttp from "./rpc-http.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
@@ -191,6 +196,7 @@ import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsag
 import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
+import * as EffectOutbox from "./orchestration-v2/EffectOutbox.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
@@ -621,6 +627,14 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  OrbitVoiceCalls.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        OrbitNativeVoice.layer,
+        OrbitT3Host.layer.pipe(Layer.provide(EffectOutbox.layer)),
+      ),
+    ),
+  ),
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
@@ -692,6 +706,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 );
 
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
+  Layer.provideMerge(OrbitRuntimeAccess.layer),
   Layer.provideMerge(layerPtyAdapter),
   Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
   Layer.provideMerge(
@@ -778,6 +793,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
+    RpcHttp.layer,
   ),
   McpHttpServer.layer.pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),

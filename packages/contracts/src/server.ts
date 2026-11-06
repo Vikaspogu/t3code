@@ -884,6 +884,56 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
   }
 }
 
+// Only these drivers expose skill toggles; other providers list skills read-only.
+const PROVIDER_SKILL_TOGGLE_DRIVERS: ReadonlyArray<ProviderDriverKind> = [
+  "claudeAgent" as ProviderDriverKind,
+  "codex" as ProviderDriverKind,
+];
+
+export function providerSupportsSkillToggle(driver: ProviderDriverKind): boolean {
+  return PROVIDER_SKILL_TOGGLE_DRIVERS.includes(driver);
+}
+
+export const ServerProviderSetSkillEnabledInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  /** Workspace whose snapshot the skill was listed under. */
+  cwd: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  enabled: Schema.Boolean,
+});
+export type ServerProviderSetSkillEnabledInput = typeof ServerProviderSetSkillEnabledInput.Type;
+
+export class ServerProviderSkillError extends Schema.TaggedError<ServerProviderSkillError>()(
+  "ServerProviderSkillError",
+  {
+    instanceId: ProviderInstanceId,
+    reason: TrimmedNonEmptyString,
+  },
+) {
+  override get message(): string {
+    return `Provider skill change failed: ${this.reason}`;
+  }
+}
+
+/** One block of the instructions T3 injects into a provider's turns. */
+export const ServerProviderInstructionSection = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  title: Schema.optional(TrimmedNonEmptyString),
+  content: Schema.String,
+});
+export type ServerProviderInstructionSection = typeof ServerProviderInstructionSection.Type;
+
+export const ServerProviderRuntimeInstructionsInput = Schema.Struct({
+  driver: ProviderDriverKind,
+});
+export type ServerProviderRuntimeInstructionsInput =
+  typeof ServerProviderRuntimeInstructionsInput.Type;
+
+export const ServerProviderRuntimeInstructions = Schema.Struct({
+  sections: Schema.Array(ServerProviderInstructionSection),
+});
+export type ServerProviderRuntimeInstructions = typeof ServerProviderRuntimeInstructions.Type;
+
 export const ServerNpmReleaseInput = Schema.Struct({
   spec: Schema.String.check(
     Schema.isMaxLength(64),

@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
+  OrchestrationV2Command,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -16,6 +17,8 @@ import {
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
 } from "./orchestrationV2.ts";
+
+const decodeOrchestrationV2Command = Schema.decodeUnknownSync(OrchestrationV2Command);
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 
@@ -325,6 +328,29 @@ describe("orchestration V2 contracts", () => {
     });
     expect(explicit.runtimePolicy).toEqual({ enforcement: "native" });
   });
+
+  it.each([undefined, false, true])(
+    "preserves strict steering target option %s",
+    (strictTarget) => {
+      const dispatchMode = {
+        type: "steer_active",
+        targetRunId: "run-1",
+        ...(strictTarget === undefined ? {} : { strictTarget }),
+      };
+      const command = decodeOrchestrationV2Command({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: "command-1",
+        threadId: "thread-1",
+        messageId: "message-1",
+        text: "correction",
+        attachments: [],
+        dispatchMode,
+      });
+      expect(command.type === "message.dispatch" && command.dispatchMode).toEqual(dispatchMode);
+    },
+  );
 
   it.each(["  indented prompt\n", "\n \t\n"])(
     "preserves workflow prompt and result %j in stored and wire JSON",

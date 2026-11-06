@@ -11,7 +11,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { publicProxy } from "./publicProxy.ts";
+import { publicProxy } from "@t3tools/shared/publicProxy";
 
 export class HtmlRenderBrowserError extends Schema.TaggedError<HtmlRenderBrowserError>()(
   "HtmlRenderBrowserError",

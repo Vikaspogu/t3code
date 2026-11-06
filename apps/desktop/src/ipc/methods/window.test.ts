@@ -27,6 +27,7 @@ import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import * as DesktopManagedPolicy from "../../app/DesktopManagedPolicy.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import * as ElectronMediaSession from "../../electron/ElectronMediaSession.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import {
@@ -240,44 +241,70 @@ describe("readMedia", () => {
   it.effect("reads http(s) media only for the main window", () =>
     Effect.gen(function* () {
       const mib = new Uint8Array(1024 * 1024);
-      const fetch = vi.fn(async (url: string) => {
-        if (url.endsWith("/missing.png")) return new Response("Not Found", { status: 404 });
-        if (url.endsWith("/small.png")) return new Response(new Uint8Array([1, 2]));
-        let sent = 0;
-        // 257 MiB from one reused chunk: over the cap without allocating it.
-        const huge = new ReadableStream<Uint8Array>({
-          pull: (controller) => (sent++ < 257 ? controller.enqueue(mib) : controller.close()),
-        });
-        return new Response(huge);
-      });
+      const fetch = vi.fn(
+        async (input: Parameters<Electron.Session["fetch"]>[0], _options?: RequestInit) => {
+          const url = typeof input === "string" ? input : input.url;
+          if (url.endsWith("/missing.png")) return new Response("Not Found", { status: 404 });
+          if (url.endsWith("/private")) return Response.json({ secret: "private response" });
+          if (url.endsWith("/empty.png")) return new Response(null, { status: 204 });
+          if (url.endsWith("/small.png")) {
+            return new Response(new Uint8Array([1, 2]), {
+              headers: { "content-type": "image/png" },
+            });
+          }
+          let sent = 0;
+          // 257 MiB from one reused chunk: over the cap without allocating it.
+          const huge = new ReadableStream<Uint8Array>({
+            pull: (controller) => (sent++ < 257 ? controller.enqueue(mib) : controller.close()),
+          });
+          return new Response(huge, { headers: { "content-type": "video/mp4" } });
+        },
+      );
       const main = {
-        webContents: { id: 1, session: { fetch } },
+        webContents: { id: 1 },
       } as unknown as Electron.BrowserWindow;
       const read = (url: string, senderId: number) =>
         readMedia
           .handler(url, { sender: { id: senderId } })
           .pipe(
             Effect.provide(
-              Layer.mock(ElectronWindow.ElectronWindow)({ main: Effect.succeedSome(main) }),
+              Layer.mergeAll(
+                Layer.mock(ElectronWindow.ElectronWindow)({ main: Effect.succeedSome(main) }),
+                Layer.succeed(ElectronMediaSession.ElectronMediaSession, { fetch }),
+              ),
             ),
           );
 
       assert.strictEqual(yield* read("https://example.com/a.png", 2), null);
       assert.strictEqual(yield* read("file:///etc/passwd", 1), null);
+      assert.strictEqual(yield* read("http://127.0.0.1/small.png", 1), null);
+      assert.strictEqual(yield* read("http://169.254.169.254/small.png", 1), null);
+      assert.strictEqual(yield* read("https://user:password@example.com/a.png", 1), null);
       assert.strictEqual(fetch.mock.calls.length, 0);
       assert.deepEqual(yield* read("https://example.com/small.png", 1), {
         status: 200,
-        mimeType: "",
+        mimeType: "image/png",
         data: Buffer.from([1, 2]),
+      });
+      assert.strictEqual(fetch.mock.calls[0]?.[1]?.credentials, "omit");
+      assert.deepEqual(yield* read("https://example.com/private", 1), {
+        status: 415,
+        mimeType: "application/json",
+        data: new Uint8Array(),
       });
       assert.deepEqual(yield* read("https://example.com/missing.png", 1), {
         status: 404,
         mimeType: "text/plain;charset=UTF-8",
         data: new Uint8Array(),
       });
+      assert.deepEqual(yield* read("https://example.com/empty.png", 1), {
+        status: 502,
+        mimeType: "",
+        data: new Uint8Array(),
+      });
       assert.deepEqual(yield* read("https://example.com/huge.mp4", 1), {
         status: 413,
-        mimeType: "",
+        mimeType: "video/mp4",
         data: new Uint8Array(),
       });
     }),

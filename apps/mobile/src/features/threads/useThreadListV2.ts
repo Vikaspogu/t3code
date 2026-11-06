@@ -61,6 +61,7 @@ export function useThreadListV2(input: {
   readonly pendingOrder: LayoutInput["pendingOrder"];
   readonly shelfPreferencesLoaded: boolean;
   readonly workingShelfEnabled: boolean;
+  readonly pinnedShelfExpanded: boolean;
   readonly workingShelfExpanded: boolean;
   readonly snoozedShelfExpanded: boolean;
   readonly settledShelfExpanded: boolean;
@@ -146,6 +147,7 @@ export function useThreadListV2(input: {
         settledLimit: input.settledLimit,
         now: layoutTime,
         workingShelfEnabled,
+        pinnedShelfExpanded: input.pinnedShelfExpanded,
         workingShelfExpanded: input.workingShelfExpanded,
         inboxReturnAt: inbox.returnedAt,
         isWorking: inbox.isWorking,
@@ -178,6 +180,7 @@ export function useThreadListV2(input: {
       input.settledLimit,
       layoutTime,
       workingShelfEnabled,
+      input.pinnedShelfExpanded,
       input.workingShelfExpanded,
       inbox.returnedAt,
       inbox.isWorking,
@@ -215,6 +218,9 @@ export function useThreadListV2(input: {
         items: layout.items,
         pendingTasks,
         workingCount: layout.workingCount,
+        pinnedCount: layout.pinnedCount,
+        pinnedShelfExpanded: input.pinnedShelfExpanded,
+        pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
         workingShelfExpanded: input.workingShelfExpanded,
         workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
         snoozedCount: layout.snoozedCount,
@@ -223,6 +229,10 @@ export function useThreadListV2(input: {
         settledCount: layout.settledCount,
         settledShelfExpanded: input.settledShelfExpanded,
         settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+        pinnedShelfDot: layout.pinnedShelfDot,
+        workingShelfDot: layout.workingShelfDot,
+        snoozedShelfDot: layout.snoozedShelfDot,
+        settledShelfDot: layout.settledShelfDot,
         snoozeLabelNow: `${input.now.slice(0, 16)}:00.000Z`,
         snoozeEnvironmentIds: input.snoozeEnvironmentIds,
         queuedThreadKeys: input.queuedThreadKeys,
@@ -232,6 +242,7 @@ export function useThreadListV2(input: {
     [
       layout,
       pendingTasks,
+      input.pinnedShelfExpanded,
       input.workingShelfExpanded,
       input.snoozedShelfExpanded,
       input.settledShelfExpanded,

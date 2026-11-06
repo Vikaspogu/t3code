@@ -1,3 +1,4 @@
+import * as OrbitVoiceCalls from "./orbit-voice/VoiceCalls.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -589,6 +590,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(SourceControlSignIn.SourceControlSignIn)({}),
+  Layer.mock(OrbitVoiceCalls.VoiceCalls)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(TerminalManager.TerminalManager)({}),

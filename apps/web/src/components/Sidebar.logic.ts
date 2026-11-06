@@ -254,6 +254,7 @@ export function resolveSidebarDropTarget(
   items: readonly SidebarListItem[],
   activeKey: string,
   overId: string,
+  pinnedDropAllowed = true,
 ): SidebarDropTarget | null {
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
@@ -262,6 +263,9 @@ export function resolveSidebarDropTarget(
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
   if (section === "working" || section === "snoozed") return null;
+  // A collapsed Pinned shelf only shows the open thread's row, so a projected
+  // order there would silently drop the hidden threads from the persisted order.
+  if (section === "pinned" && !pinnedDropAllowed) return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";

@@ -11,7 +11,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState } from "react";
+import { useRef, useState, useMemo } from "react";
 import { Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -360,6 +360,7 @@ function ProviderAccount({
         }
       >
         <ProviderAccountSummary key={email} name={name} status={status} email={email} />
+        <ProviderSkillsSummary provider={provider} />
         {trailing}
       </View>
       {interaction?.type === "deviceCode" ||
@@ -458,6 +459,42 @@ function ProviderAccount({
         />
       ) : null}
     </View>
+  );
+}
+
+function ProviderSkillsSummary({ provider }: { readonly provider: ServerProvider }) {
+  const [open, setOpen] = useState(false);
+  const skills = useMemo(() => {
+    const snapshots = [...(provider.workspaceSnapshots ?? [])].sort(
+      (a, b) => Date.parse(b.checkedAt) - Date.parse(a.checkedAt),
+    );
+    return snapshots[0]?.skills ?? provider.skills;
+  }, [provider.skills, provider.workspaceSnapshots]);
+  if (skills.length === 0) return null;
+  const disabledCount = skills.filter((skill) => !skill.enabled).length;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={open ? "Hide skills" : "Show skills"}
+      onPress={() => setOpen((value) => !value)}
+      className="min-h-[44px] justify-center"
+    >
+      <Text className="text-sm text-foreground-muted">
+        {skills.length} skills{disabledCount > 0 ? ` (${disabledCount} disabled)` : ""}
+        {open ? "" : ". Tap to view"}
+      </Text>
+      {open
+        ? skills.map((skill) => (
+            <Text
+              key={`${skill.scope ?? ""}:${skill.name}`}
+              className="text-sm text-foreground-muted"
+            >
+              {skill.displayName ?? skill.name}
+              {skill.enabled ? "" : " (disabled)"}
+            </Text>
+          ))
+        : null}
+    </Pressable>
   );
 }
 

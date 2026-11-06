@@ -1081,6 +1081,16 @@ describe("Working shelf (beta)", () => {
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
     });
 
+    it("does not drop into a collapsed Pinned shelf", () => {
+      expect(resolveSidebarDropTarget(items, "a1", "p1", false)).toBeNull();
+      // Leaving the shelf still works when only the open pinned row is visible.
+      expect(resolveSidebarDropTarget(items, "p1", "a2", false)).toEqual({
+        section: "active",
+        pinnedOrder: [],
+        activeOrder: ["a1", "a2", "p1"],
+      });
+    });
+
     it.each([
       ["pinned", "p1"],
       ["active", "a2"],

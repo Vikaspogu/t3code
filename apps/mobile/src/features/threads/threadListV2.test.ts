@@ -34,6 +34,7 @@ import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
+  resolveThreadListV2ShelfDot,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozePresets,
   resolveThreadListV2Status,
@@ -418,6 +419,33 @@ describe("buildThreadListV2Items", () => {
     expect(layout.snoozedCount).toBe(2);
   });
 
+  it("collapses pinned threads behind a shelf, keeping the selected one", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("open"),
+          title: "Open",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("other"),
+          title: "Other",
+          pinnedAt: "2026-06-01T11:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      selectedThreadKey: `${environmentId}:open`,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["open"]);
+    expect(layout.items[0]?.pinned).toBe(true);
+    expect(layout.pinnedCount).toBe(2);
+    expect(layout.pinnedShelfHeaderIndex).toBe(1);
+  });
+
   it("keeps snoozed threads visible on environments without the snooze capability", () => {
     const layout = buildThreadListV2Items({
       threads: [
@@ -533,6 +561,122 @@ describe("buildThreadListV2Items", () => {
   });
 });
 
+describe("collapsed shelf dots", () => {
+  const run = (completedAt: string) => ({
+    runId: RunId.make("run-dot"),
+    status: "completed" as const,
+    requestedAt: completedAt,
+    startedAt: completedAt,
+    completedAt,
+    assistantMessageId: null,
+  });
+
+  it("resolveThreadListV2ShelfDot prefers the most urgent state", () => {
+    const done = makeThread({
+      id: ThreadId.make("done"),
+      title: "Done",
+      lastVisitedAt: "2026-06-01T00:00:00.000Z",
+      latestRun: run("2026-06-02T00:00:00.000Z"),
+    });
+    const failed = makeThread({
+      id: ThreadId.make("failed"),
+      title: "Failed",
+      runtime: {
+        status: "failed",
+        activeRunId: null,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerName: "Codex",
+        lastError: "Run failed",
+        updatedAt: NOW,
+      },
+    });
+    const needsYou = makeThread({
+      id: ThreadId.make("needs-you"),
+      title: "Needs you",
+      hasPendingApprovals: true,
+    });
+    const working = makeThread({
+      id: ThreadId.make("working"),
+      title: "Working",
+      runtime: {
+        status: "running",
+        activeRunId: RunId.make("run-active"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerName: "Codex",
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    const quiet = makeThread({ id: ThreadId.make("quiet"), title: "Quiet" });
+
+    expect(resolveThreadListV2ShelfDot([quiet])).toBeNull();
+    expect(resolveThreadListV2ShelfDot([done])).toBe("unread");
+    expect(resolveThreadListV2ShelfDot([done, working])).toBe("unread");
+    expect(resolveThreadListV2ShelfDot([done, failed])).toBe("failed");
+    expect(resolveThreadListV2ShelfDot([done, failed, needsYou])).toBe("attention");
+  });
+
+  it("buildThreadListV2Items dots a collapsed shelf and skips the visible selected thread", () => {
+    const pinned = makeThread({
+      id: ThreadId.make("pinned-done"),
+      title: "Pinned done",
+      pinnedAt: "2026-06-01T00:00:00.000Z",
+      pinOrderKey: "a",
+      lastVisitedAt: "2026-06-01T00:00:00.000Z",
+      latestRun: run("2026-06-02T00:00:00.000Z"),
+    });
+    const layout = buildThreadListV2Items({
+      threads: [pinned, makeThread({ id: ThreadId.make("active"), title: "Active" })],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      selectedThreadKey: "environment-1:pinned-done",
+    });
+    expect(layout.pinnedShelfDot).toBeNull();
+
+    const collapsedLayout = buildThreadListV2Items({
+      threads: [pinned, makeThread({ id: ThreadId.make("active"), title: "Active" })],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      selectedThreadKey: null,
+    });
+    expect(collapsedLayout.pinnedShelfDot).toBe("unread");
+    expect(collapsedLayout.workingShelfDot).toBeNull();
+    expect(collapsedLayout.snoozedShelfDot).toBeNull();
+    expect(collapsedLayout.settledShelfDot).toBeNull();
+    const defaultCollapsedSnoozed = makeThread({
+      id: ThreadId.make("snoozed-done"),
+      title: "Snoozed done",
+      snoozedUntil: "2026-06-02T01:00:00.000Z",
+      lastVisitedAt: "2026-06-01T00:00:00.000Z",
+      latestRun: run("2026-06-02T00:00:00.000Z"),
+    });
+    expect(
+      buildThreadListV2Items({
+        threads: [defaultCollapsedSnoozed],
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+      }).snoozedShelfDot,
+    ).toBe("unread");
+    expect(
+      buildThreadListV2ListItems({
+        items: collapsedLayout.items,
+        pendingTasks: [],
+        pinnedCount: collapsedLayout.pinnedCount,
+        pinnedShelfExpanded: false,
+        pinnedShelfHeaderIndex: collapsedLayout.pinnedShelfHeaderIndex,
+        pinnedShelfDot: collapsedLayout.pinnedShelfDot,
+        workingShelfDot: collapsedLayout.workingShelfDot,
+        snoozedShelfDot: collapsedLayout.snoozedShelfDot,
+        settledShelfDot: collapsedLayout.settledShelfDot,
+      }),
+    ).toContainEqual(expect.objectContaining({ type: "v2-pinned-shelf", dot: "unread" }));
+  });
+});
 describe("buildThreadListV2Items settled paging", () => {
   it("caps the settled tail at settledLimit and reports the hidden count", () => {
     const threads = [
@@ -829,6 +973,41 @@ describe("buildThreadListV2ListItems", () => {
     expect(threadJumpTarget(items, "thread.jump.1")?.id).toBe("active");
     expect(threadJumpTarget(items, "thread.jump.2")?.id).toBe("settled");
     expect(threadJumpTarget(items, "thread.jump.3")).toBeNull();
+  });
+
+  it("leads the list with a collapsed pinned shelf header above the selected row", () => {
+    const pinnedLayout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("pinned-a"),
+          title: "pinned-a",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("pinned-b"),
+          title: "pinned-b",
+          pinnedAt: "2026-06-01T11:00:00.000Z",
+        }),
+        makeThread({ id: ThreadId.make("active"), title: "active" }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      selectedThreadKey: `${environmentId}:pinned-a`,
+    });
+    const items = buildThreadListV2ListItems({
+      items: pinnedLayout.items,
+      pendingTasks: [],
+      pinnedCount: pinnedLayout.pinnedCount,
+      pinnedShelfExpanded: false,
+      pinnedShelfHeaderIndex: pinnedLayout.pinnedShelfHeaderIndex,
+    });
+
+    expect(
+      items.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type)),
+    ).toEqual(["v2-pinned-shelf", "pinned-a", "active"]);
+    expect(items[0]).toMatchObject({ count: 2, expanded: false });
   });
 });
 
@@ -1300,7 +1479,10 @@ describe("threadListV2ListItemsAreEqual", () => {
     latestUserMessageAt: isoAt(BASE_MS - 5 * MINUTE_MS),
   });
   const layout = buildThreadListV2Items({
-    threads: [thread],
+    threads: [
+      thread,
+      makeThread({ id: ThreadId.make("eq-pinned"), title: "eq pinned", pinnedAt: NOW }),
+    ],
     environmentId: null,
     searchQuery: "",
     now: NOW,
@@ -1310,6 +1492,8 @@ describe("threadListV2ListItemsAreEqual", () => {
     buildThreadListV2ListItems({
       items: layout.items,
       pendingTasks: [queued],
+      pinnedCount: layout.pinnedCount,
+      pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
       snoozeLabelNow: NOW,
     });
 

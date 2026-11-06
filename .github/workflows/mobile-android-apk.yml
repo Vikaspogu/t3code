@@ -3,9 +3,9 @@ name: Mobile Android APK
 # Checks closed testing hourly. Each new beta gets one versioned prerelease.
 # Unchanged checks publish nothing.
 on:
-  schedule:
-    # Avoid minute zero, when GitHub scheduled jobs are busiest.
-    - cron: "23 * * * *"
+  # ponytail(orbit): schedule disabled on the Orbit fork — the hourly EAS/Play
+  # nightly needs upstream's credentials. Release APKs come from
+  # release-orbit.yaml instead. Manual runs stay available.
   workflow_dispatch:
 
 concurrency:

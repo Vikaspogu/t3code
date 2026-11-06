@@ -285,6 +285,10 @@ const config: ExpoConfig = {
     },
   },
   android: {
+    // Release builds stamp an increasing version code from CI; unset locally.
+    ...(repoEnv.T3CODE_ANDROID_VERSION_CODE
+      ? { versionCode: Number.parseInt(repoEnv.T3CODE_ANDROID_VERSION_CODE, 10) }
+      : {}),
     icon: variant.assets.appIcon,
     package: variant.androidPackage,
     ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
@@ -301,7 +305,11 @@ const config: ExpoConfig = {
     // JS back dispatch needs RN's Android 16 shim and withAndroidPredictiveBackCompat on Android 13-15.
     predictiveBackGestureEnabled: true,
     // expo-sensors declares this for its pedometer, which the app does not use.
-    blockedPermissions: ["android.permission.ACTIVITY_RECOGNITION"],
+    blockedPermissions: [
+      "android.permission.ACTIVITY_RECOGNITION",
+      // Injected by @config-plugins/react-native-webrtc; overlay windows are not used.
+      "android.permission.SYSTEM_ALERT_WINDOW",
+    ],
   },
   web: {
     favicon: variant.assets.appIcon,
@@ -334,6 +342,13 @@ const config: ExpoConfig = {
       },
     ],
     "expo-secure-store",
+    [
+      "@config-plugins/react-native-webrtc",
+      {
+        microphonePermission:
+          "Allow $(PRODUCT_NAME) to use your microphone for voice calls with your coding agent.",
+      },
+    ],
     "expo-sqlite",
     ...(isIosPersonalTeamBuild
       ? [sharingPlugin]

@@ -4,6 +4,7 @@ import {
   AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  AuthProvidersManageScope,
   AuthPreviewOperateScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
@@ -15,6 +16,14 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.orbitVoiceStart]: AuthOrchestrationOperateScope,
+  [WS_METHODS.orbitVoiceSubmit]: AuthOrchestrationOperateScope,
+  [WS_METHODS.orbitVoiceEnd]: AuthOrchestrationOperateScope,
+  [WS_METHODS.orbitVoiceRenewPresence]: AuthOrchestrationOperateScope,
+  // Toggling a provider skill edits that provider's config, exactly like the
+  // provider settings it sits beside in the UI.
+  [WS_METHODS.providerSetSkillEnabled]: AuthProvidersManageScope,
+  [WS_METHODS.orbitVoiceSnapshot]: AuthOrchestrationReadScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   // Stopping a server signals its processes, as closing a terminal does.
   [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,

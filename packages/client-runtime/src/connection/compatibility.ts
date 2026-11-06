@@ -39,3 +39,20 @@ export function appendOrchestrationProtocol(socketUrl: string): string {
   url.searchParams.set(ORCHESTRATION_PROTOCOL_QUERY_PARAM, String(ORCHESTRATION_PROTOCOL_VERSION));
   return url.toString();
 }
+
+// HTTP fallback preserves the prepared socket URL's authentication and client metadata.
+export function httpRpcUrlFromSocketUrl(socketUrl: string): string {
+  const url = new URL(socketUrl);
+  if (url.protocol !== "wss:" && url.protocol !== "ws:") {
+    // Fail loudly rather than silently downgrading (or upgrading) an
+    // unexpected scheme — the input contract is a prepared socket URL.
+    throw new Error(`Not a socket URL: ${socketUrl}`);
+  }
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  if (url.pathname === "" || url.pathname === "/") {
+    url.pathname = "/rpc";
+  } else {
+    url.pathname = url.pathname.replace(/\/ws$/, "/rpc");
+  }
+  return url.toString();
+}

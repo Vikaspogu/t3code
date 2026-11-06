@@ -11,6 +11,7 @@ import {
   AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  clientRpcRequiredScopes,
   AuthPreviewOperateScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
@@ -67,6 +68,19 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it("requires operate permission for voice commands and read permission for captions", () => {
+    for (const method of [
+      "orbitVoice.start",
+      "orbitVoice.submit",
+      "orbitVoice.end",
+      "orbitVoice.renewPresence",
+    ]) {
+      expect(clientRpcRequiredScopes(method, {})).toEqual([AuthOrchestrationOperateScope]);
+    }
+    expect(clientRpcRequiredScopes("orbitVoice.snapshot", {})).toEqual([
+      AuthOrchestrationReadScope,
+    ]);
+  });
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {
