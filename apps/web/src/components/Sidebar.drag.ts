@@ -101,6 +101,7 @@ export function createSidebarSortingStrategy(input: {
   cardHeight?: number;
   slimHeight?: number;
   boundaryLabelHeight?: number;
+  pinnedDropAllowed?: boolean;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
@@ -112,7 +113,12 @@ export function createSidebarSortingStrategy(input: {
     const active = items[activeIndex];
     const over = items[overIndex] ?? active;
     if (active?.kind !== "thread" || !over || !rects[0]) return [];
-    const target = resolveSidebarDropTarget(items, active.key, sidebarListItemId(over));
+    const target = resolveSidebarDropTarget(
+      items,
+      active.key,
+      sidebarListItemId(over),
+      input.pinnedDropAllowed ?? true,
+    );
     if (!target) return [];
     const groups: Record<SidebarSection, ThreadItem[]> = {
       pinned: [],
@@ -200,8 +206,8 @@ export function createSidebarSortingStrategy(input: {
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;
       return item.kind === "marker" &&
-        (item.marker === "pinned-header" || item.marker === "pinned-divider")
-        ? labelHeight
+        (item.marker === "pinned-divider" || item.marker === "pinned-header")
+        ? rect?.height || labelHeight
         : item.kind === "marker" && item.marker.endsWith("placeholder")
           ? slimHeight
           : moved

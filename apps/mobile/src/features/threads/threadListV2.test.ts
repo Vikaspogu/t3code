@@ -418,6 +418,33 @@ describe("buildThreadListV2Items", () => {
     expect(layout.snoozedCount).toBe(2);
   });
 
+  it("collapses pinned threads behind a shelf, keeping the selected one", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("open"),
+          title: "Open",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("other"),
+          title: "Other",
+          pinnedAt: "2026-06-01T11:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      selectedThreadKey: `${environmentId}:open`,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["open"]);
+    expect(layout.items[0]?.pinned).toBe(true);
+    expect(layout.pinnedCount).toBe(2);
+    expect(layout.pinnedShelfHeaderIndex).toBe(1);
+  });
+
   it("keeps snoozed threads visible on environments without the snooze capability", () => {
     const layout = buildThreadListV2Items({
       threads: [
@@ -829,6 +856,41 @@ describe("buildThreadListV2ListItems", () => {
     expect(threadJumpTarget(items, "thread.jump.1")?.id).toBe("active");
     expect(threadJumpTarget(items, "thread.jump.2")?.id).toBe("settled");
     expect(threadJumpTarget(items, "thread.jump.3")).toBeNull();
+  });
+
+  it("leads the list with a collapsed pinned shelf header above the selected row", () => {
+    const pinnedLayout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("pinned-a"),
+          title: "pinned-a",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("pinned-b"),
+          title: "pinned-b",
+          pinnedAt: "2026-06-01T11:00:00.000Z",
+        }),
+        makeThread({ id: ThreadId.make("active"), title: "active" }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      selectedThreadKey: `${environmentId}:pinned-a`,
+    });
+    const items = buildThreadListV2ListItems({
+      items: pinnedLayout.items,
+      pendingTasks: [],
+      pinnedCount: pinnedLayout.pinnedCount,
+      pinnedShelfExpanded: false,
+      pinnedShelfHeaderIndex: pinnedLayout.pinnedShelfHeaderIndex,
+    });
+
+    expect(
+      items.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type)),
+    ).toEqual(["v2-pinned-shelf", "pinned-a", "active"]);
+    expect(items[0]).toMatchObject({ count: 2, expanded: false });
   });
 });
 
@@ -1300,7 +1362,10 @@ describe("threadListV2ListItemsAreEqual", () => {
     latestUserMessageAt: isoAt(BASE_MS - 5 * MINUTE_MS),
   });
   const layout = buildThreadListV2Items({
-    threads: [thread],
+    threads: [
+      thread,
+      makeThread({ id: ThreadId.make("eq-pinned"), title: "eq pinned", pinnedAt: NOW }),
+    ],
     environmentId: null,
     searchQuery: "",
     now: NOW,
@@ -1310,6 +1375,8 @@ describe("threadListV2ListItemsAreEqual", () => {
     buildThreadListV2ListItems({
       items: layout.items,
       pendingTasks: [queued],
+      pinnedCount: layout.pinnedCount,
+      pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
       snoozeLabelNow: NOW,
     });
 
