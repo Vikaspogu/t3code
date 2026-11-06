@@ -3514,6 +3514,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   marker="pinned-header"
                                   label="Pinned"
                                   count={pinnedThreads.length}
+                                  hiddenThreads={
+                                    pinnedShelfExpanded
+                                      ? undefined
+                                      : pinnedThreads.filter(
+                                          (thread) => threadShellKey(thread) !== routeRowThreadKey,
+                                        )
+                                  }
                                   dragging={from !== null}
                                   isDropTarget={dragTargetSection === "pinned"}
                                   toggle={{
@@ -3571,6 +3578,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 className="mt-auto"
                                 label="Working"
                                 count={workingThreads.length}
+                                hiddenThreads={
+                                  workingShelfExpanded
+                                    ? undefined
+                                    : workingThreads.filter(
+                                        (thread) => threadShellKey(thread) !== routeRowThreadKey,
+                                      )
+                                }
                                 toggle={{
                                   expanded: workingShelfExpanded,
                                   onToggle: toggleWorkingShelf,
@@ -3586,6 +3600,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 className={cn(workingThreads.length === 0 && "mt-auto")}
                                 label="Snoozed"
                                 count={snoozedThreads.length}
+                                hiddenThreads={
+                                  snoozedShelfExpanded
+                                    ? undefined
+                                    : snoozedThreads.filter(
+                                        (thread) => threadShellKey(thread) !== routeRowThreadKey,
+                                      )
+                                }
                                 toggle={{
                                   expanded: snoozedShelfExpanded,
                                   onToggle: toggleSnoozedShelf,
@@ -3603,6 +3624,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 )}
                                 label="Settled"
                                 count={settledCount}
+                                hiddenThreads={
+                                  settledShelfExpanded
+                                    ? undefined
+                                    : settledThreads.filter(
+                                        (thread) => threadShellKey(thread) !== routeRowThreadKey,
+                                      )
+                                }
                                 dragging={from !== null}
                                 isDropTarget={dragTargetSection === "settled"}
                                 toggle={{

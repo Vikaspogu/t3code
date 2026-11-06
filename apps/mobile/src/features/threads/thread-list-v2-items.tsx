@@ -74,6 +74,7 @@ import {
   resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
   type ThreadListV2Status,
+  type ThreadListV2ShelfDot,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
@@ -139,6 +140,20 @@ const DONE_STATUS_LABEL: StatusLabel = {
   iconTintClassName: "accent-adaptive-emerald-700-300",
 };
 
+const SHELF_DOT_CLASS_NAME: Record<ThreadListV2ShelfDot, string> = {
+  attention: "bg-warning",
+  failed: "bg-danger",
+  unread: "bg-success",
+  working: "bg-adaptive-sky-600-400",
+} as const;
+
+const SHELF_DOT_LABEL: Record<ThreadListV2ShelfDot, string> = {
+  attention: ", needs you",
+  failed: ", failed",
+  unread: ", done",
+  working: ", working",
+} as const;
+
 function ThreadListV2Duration(props: { readonly startedAt: string | null }) {
   const startedAtMs = Date.parse(props.startedAt ?? "");
   const nowMs = useVisibleSecondClock(Number.isFinite(startedAtMs));
@@ -177,6 +192,8 @@ function ThreadListV2Section(props: {
     readonly accessibilityLabel: string;
     readonly accessibilityHint: string;
   };
+  /** Dot on the header when the shelf is collapsed; null while expanded. */
+  readonly dot?: ThreadListV2ShelfDot | null;
 }) {
   const snoozed = props.tone === "snoozed";
   const sidebarPane = props.pane === "sidebar";
@@ -198,6 +215,12 @@ function ThreadListV2Section(props: {
       >
         {props.label}
       </Text>
+      {props.dot ? (
+        <View
+          aria-hidden
+          className={`size-1.5 shrink-0 rounded-full ${SHELF_DOT_CLASS_NAME[props.dot]}`}
+        />
+      ) : null}
       <View
         className={cn(
           "h-px flex-1",
@@ -256,6 +279,7 @@ type ThreadListV2ShelfHeaderProps = {
   readonly expanded: boolean;
   readonly onToggle: () => void;
   readonly pane?: "screen" | "sidebar";
+  readonly dot?: ThreadListV2ShelfDot | null;
 };
 
 const SHELF_LABEL = {
@@ -273,12 +297,13 @@ function ThreadListV2ShelfHeader(
     <ThreadListV2Section
       label={props.expanded ? label : `${label} (${props.count})`}
       pane={props.pane}
+      dot={props.dot}
       tone={props.kind === "snoozed" ? "snoozed" : "default"}
       disclosure={{
         expanded: props.expanded,
         disabled: props.disabled,
         onToggle: props.onToggle,
-        accessibilityLabel: `${props.count} ${props.kind} ${props.count === 1 ? "thread" : "threads"}`,
+        accessibilityLabel: `${props.count} ${props.kind} ${props.count === 1 ? "thread" : "threads"}${props.dot ? SHELF_DOT_LABEL[props.dot] : ""}`,
         accessibilityHint: `${props.expanded ? "Collapses" : "Expands"} the ${props.kind} threads.`,
       }}
     />

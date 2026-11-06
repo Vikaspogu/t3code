@@ -633,6 +633,7 @@ function ThreadNavigationSidebarPane(
             disabled={item.disabled}
             expanded={item.expanded}
             onToggle={togglePinnedShelf}
+            dot={item.dot}
             pane="sidebar"
           />
         );
@@ -643,6 +644,7 @@ function ThreadNavigationSidebarPane(
             disabled={item.disabled}
             expanded={item.expanded}
             onToggle={toggleWorkingShelf}
+            dot={item.dot}
             pane="sidebar"
           />
         );
@@ -653,6 +655,7 @@ function ThreadNavigationSidebarPane(
             disabled={item.disabled}
             expanded={item.expanded}
             onToggle={toggleSnoozedShelf}
+            dot={item.dot}
             pane="sidebar"
           />
         );
@@ -663,6 +666,7 @@ function ThreadNavigationSidebarPane(
             disabled={item.disabled}
             expanded={item.expanded}
             onToggle={toggleSettledShelf}
+            dot={item.dot}
             pane="sidebar"
           />
         );

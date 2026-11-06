@@ -1,13 +1,18 @@
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { type ReactNode, useLayoutEffect } from "react";
 import { cn } from "~/lib/utils";
+import { useUiStateStore } from "../../uiStateStore";
+import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import {
   animateSidebarLayoutChanges,
   sidebarMarkerId,
   type SidebarListMarker,
 } from "../Sidebar.logic";
+import { FOLDER_DOT_CLASS_NAME, FOLDER_DOT_LABEL } from "./SidebarProjectFolderHeader";
 import { SIDEBAR_SORTABLE_DRAG_DISABLED } from "./SidebarThreadRow";
 
 function SortableSidebarMarker(props: {
@@ -116,7 +121,26 @@ export function SidebarSectionHeader(props: {
   dragging?: boolean;
   isDropTarget?: boolean;
   toggle: { expanded: boolean; onToggle: () => void };
+  /** Threads hidden by the collapse; their most urgent state shows as a dot on the header. */
+  hiddenThreads?: readonly EnvironmentThreadShell[] | undefined;
 }) {
+  const localLastVisitedAtById = useUiStateStore((state) =>
+    !props.toggle.expanded ? state.threadLastVisitedAtById : null,
+  );
+  const dot =
+    !props.toggle.expanded && props.hiddenThreads !== undefined && props.hiddenThreads.length > 0
+      ? resolveSidebarFolderDot(
+          props.hiddenThreads.map((thread) => ({
+            ...thread,
+            lastVisitedAt: resolveThreadLastVisitedAt(
+              thread.lastVisitedAt,
+              localLastVisitedAtById?.[
+                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+              ],
+            ),
+          })),
+        )
+      : null;
   const shelf =
     props.marker === "pinned-header"
       ? "pinned"
@@ -139,7 +163,16 @@ export function SidebarSectionHeader(props: {
         expanded={props.toggle.expanded}
         tone={props.isDropTarget ? "accent" : props.dragging ? "emphasized" : "muted"}
         data-testid={`sidebar-${shelf}-shelf-toggle`}
-        accessory={<span className="font-normal tabular-nums">{props.count}</span>}
+        accessory={
+          <>
+            {dot ? (
+              <span className={cn("size-1.5 shrink-0 rounded-full", FOLDER_DOT_CLASS_NAME[dot])}>
+                <span className="sr-only">{FOLDER_DOT_LABEL[dot]}</span>
+              </span>
+            ) : null}
+            <span className="font-normal tabular-nums">{props.count}</span>
+          </>
+        }
       >
         {props.label}
       </CollapsibleSectionHeader>

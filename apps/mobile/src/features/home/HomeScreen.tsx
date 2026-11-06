@@ -547,6 +547,7 @@ export function HomeScreen(props: HomeScreenProps) {
           disabled={item.disabled}
           expanded={item.expanded}
           onToggle={togglePinnedShelf}
+          dot={item.dot}
         />
       );
     }
@@ -557,6 +558,7 @@ export function HomeScreen(props: HomeScreenProps) {
           disabled={item.disabled}
           expanded={item.expanded}
           onToggle={toggleWorkingShelf}
+          dot={item.dot}
         />
       );
     }
@@ -567,6 +569,7 @@ export function HomeScreen(props: HomeScreenProps) {
           disabled={item.disabled}
           expanded={item.expanded}
           onToggle={toggleSnoozedShelf}
+          dot={item.dot}
         />
       );
     }
@@ -577,6 +580,7 @@ export function HomeScreen(props: HomeScreenProps) {
           disabled={item.disabled}
           expanded={item.expanded}
           onToggle={toggleSettledShelf}
+          dot={item.dot}
         />
       );
     }
