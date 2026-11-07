@@ -975,7 +975,7 @@ describe("buildThreadListV2ListItems", () => {
     expect(threadJumpTarget(items, "thread.jump.3")).toBeNull();
   });
 
-  it("leads the list with a collapsed pinned shelf header above the selected row", () => {
+  it("collapses the pinned and idle shelves down to their selected row", () => {
     const pinnedLayout = buildThreadListV2Items({
       threads: [
         makeThread({
@@ -1008,6 +1008,31 @@ describe("buildThreadListV2ListItems", () => {
       items.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type)),
     ).toEqual(["v2-pinned-shelf", "pinned-a", "active"]);
     expect(items[0]).toMatchObject({ count: 2, expanded: false });
+
+    const idleLayout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("pinned-a"), title: "pinned-a", pinnedAt: NOW }),
+        makeThread({ id: ThreadId.make("idle-a"), title: "idle-a" }),
+        makeThread({ id: ThreadId.make("idle-b"), title: "idle-b" }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      idleShelfExpanded: false,
+      selectedThreadKey: `${environmentId}:idle-b`,
+    });
+    const idleItems = buildThreadListV2ListItems({
+      items: idleLayout.items,
+      pendingTasks: [],
+      pinnedCount: idleLayout.pinnedCount,
+      pinnedShelfHeaderIndex: idleLayout.pinnedShelfHeaderIndex,
+      idleCount: idleLayout.idleCount,
+      idleShelfExpanded: false,
+    });
+    expect(
+      idleItems.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type)),
+    ).toEqual(["v2-pinned-shelf", "pinned-a", "v2-idle-shelf", "idle-b"]);
+    expect(idleItems[2]).toMatchObject({ count: 2, expanded: false });
   });
 });
 

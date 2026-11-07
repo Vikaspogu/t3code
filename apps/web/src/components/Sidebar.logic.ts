@@ -214,6 +214,7 @@ export type SidebarListMarker =
   | "pinned-header"
   | "active-placeholder"
   | "settled-placeholder"
+  | "active-header"
   | "pinned-divider"
   | "working-header"
   | "snoozed-header"

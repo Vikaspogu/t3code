@@ -1620,6 +1620,25 @@ export function deriveAvailableRevertTurnCounts(projection: ThreadStructure | nu
 }
 
 /**
+ * The models behind the live working row: what the user picked, and the concrete
+ * provider model the provider stamped on the turn once it started.
+ */
+export function deriveActiveTurnModels(
+  projection: ThreadStructure,
+  activityRunId: RunId | null,
+): { modelSelection: ModelSelection; actualModel: string | null } | null {
+  if (activityRunId === null) return null;
+  const run = projection.runs.find((run) => run.id === activityRunId);
+  if (run === undefined || run.activeAttemptId === null) return null;
+  let latest: OrchestrationV2ProviderTurn | null = null;
+  for (const turn of projection.providerTurns) {
+    if (turn.runAttemptId !== run.activeAttemptId) continue;
+    if (latest === null || turn.ordinal > latest.ordinal) latest = turn;
+  }
+  return { modelSelection: run.modelSelection, actualModel: latest?.actualModel ?? null };
+}
+
+/**
  * Changes when the agent may have changed the workspace, so file views refresh. File tools are
  * explicit; completed commands are included because a shell command can mutate the workspace
  * without reporting the paths it touched.

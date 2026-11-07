@@ -7,7 +7,7 @@ import { MarkdownFindContext } from "./markdownFindContext";
 import { useChatCanvas } from "./ChatCanvasContext";
 import { WorkLogBlock } from "./WorkLog";
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
-import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
+import type { ModelSelection, WorktreeSetupSnapshot } from "@t3tools/contracts";
 import { deriveTimelineMinimapItems } from "./timelineMinimapItems";
 import {
   type AssistantCitation,
@@ -242,6 +242,8 @@ interface MessagesTimelineProps {
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun: TimelineLatestRun | null;
+  activeTurnModelSelection?: ModelSelection | null;
+  activeTurnActualModel?: string | null;
   /** The run the screen reader announcer follows; see announcedRun. */
   announcedRun?: { readonly runId: RunId; readonly status: TimelineLatestRun["status"] } | null;
   /** See isDetailBehindShell. */
@@ -358,6 +360,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   activeFindMatch = null,
   findNavigationId = 0,
   latestRun,
+  activeTurnModelSelection = null,
+  activeTurnActualModel = null,
   announcedRun = null,
   detailBehindShell = false,
   runningRunId = null,
@@ -674,6 +678,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     isWorking,
     runlessWorkActive,
     activeTurnStartedAt,
+    activeTurnModelSelection,
+    activeTurnActualModel,
     turnDiffSummaries,
     supportsConversationRollback,
     threadStartCheckpointReady,

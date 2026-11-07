@@ -62,6 +62,7 @@ export function useThreadListV2(input: {
   readonly shelfPreferencesLoaded: boolean;
   readonly workingShelfEnabled: boolean;
   readonly pinnedShelfExpanded: boolean;
+  readonly idleShelfExpanded: boolean;
   readonly workingShelfExpanded: boolean;
   readonly snoozedShelfExpanded: boolean;
   readonly settledShelfExpanded: boolean;
@@ -148,6 +149,7 @@ export function useThreadListV2(input: {
         now: layoutTime,
         workingShelfEnabled,
         pinnedShelfExpanded: input.pinnedShelfExpanded,
+        idleShelfExpanded: input.idleShelfExpanded,
         workingShelfExpanded: input.workingShelfExpanded,
         inboxReturnAt: inbox.returnedAt,
         isWorking: inbox.isWorking,
@@ -181,6 +183,7 @@ export function useThreadListV2(input: {
       layoutTime,
       workingShelfEnabled,
       input.pinnedShelfExpanded,
+      input.idleShelfExpanded,
       input.workingShelfExpanded,
       inbox.returnedAt,
       inbox.isWorking,
@@ -220,6 +223,7 @@ export function useThreadListV2(input: {
         workingCount: layout.workingCount,
         pinnedCount: layout.pinnedCount,
         pinnedShelfExpanded: input.pinnedShelfExpanded,
+        idleShelfExpanded: input.idleShelfExpanded,
         pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
         workingShelfExpanded: input.workingShelfExpanded,
         workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
@@ -230,6 +234,8 @@ export function useThreadListV2(input: {
         settledShelfExpanded: input.settledShelfExpanded,
         settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
         pinnedShelfDot: layout.pinnedShelfDot,
+        idleCount: layout.idleCount,
+        idleShelfDot: layout.idleShelfDot,
         workingShelfDot: layout.workingShelfDot,
         snoozedShelfDot: layout.snoozedShelfDot,
         settledShelfDot: layout.settledShelfDot,
@@ -243,6 +249,7 @@ export function useThreadListV2(input: {
       layout,
       pendingTasks,
       input.pinnedShelfExpanded,
+      input.idleShelfExpanded,
       input.workingShelfExpanded,
       input.snoozedShelfExpanded,
       input.settledShelfExpanded,

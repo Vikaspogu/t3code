@@ -1752,6 +1752,27 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn !== null && recordString(event["message"], "role") === "assistant") {
               turn.sawAgentActivity = true;
               turn.messageOrdinal += 1;
+              const provider = recordString(event["message"], "provider");
+              const modelId = recordString(event["message"], "model");
+              if (provider !== undefined && modelId !== undefined) {
+                const previousModel = turn.actualModel;
+                turn.actualModel = `${provider}/${modelId}`;
+                if (
+                  turn.actualModel !== previousModel &&
+                  (previousModel !== null ||
+                    turn.actualModel !== turn.turnInput.modelSelection.model)
+                ) {
+                  yield* emit({
+                    type: "provider_turn.updated",
+                    driver: PI_PROVIDER,
+                    threadId: turn.turnInput.threadId,
+                    providerTurn: {
+                      ...turn.providerTurn,
+                      actualModel: turn.actualModel,
+                    },
+                  });
+                }
+              }
             }
             return;
           }

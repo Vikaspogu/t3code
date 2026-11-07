@@ -284,6 +284,7 @@ type ThreadListV2ShelfHeaderProps = {
 
 const SHELF_LABEL = {
   pinned: "Pinned",
+  idle: "Idle",
   working: "Working",
   snoozed: "Snoozed",
   settled: "Settled",
@@ -314,6 +315,12 @@ export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShe
   props: ThreadListV2ShelfHeaderProps,
 ) {
   return <ThreadListV2ShelfHeader {...props} kind="pinned" />;
+});
+
+export const ThreadListV2IdleShelfHeader = memo(function ThreadListV2IdleShelfHeader(
+  props: ThreadListV2ShelfHeaderProps,
+) {
+  return <ThreadListV2ShelfHeader {...props} kind="idle" />;
 });
 
 export const ThreadListV2WorkingShelfHeader = memo(function ThreadListV2WorkingShelfHeader(

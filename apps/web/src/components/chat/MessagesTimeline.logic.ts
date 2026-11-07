@@ -15,6 +15,7 @@ import {
 } from "@t3tools/client-runtime/user-message";
 import type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
 import { renderCodexDirectivesForCopy } from "@t3tools/shared/codexMarkdownDirectives";
+import type { ModelSelection } from "@t3tools/contracts";
 import {
   commandDisplayText,
   commandProgramName,
@@ -530,6 +531,8 @@ type MessagesTimelineRowContent =
       createdAt: string | null;
       /** A running compaction owns the working row, so its divider appears only once it ends. */
       compacting?: true;
+      actualModel?: string;
+      modelSelection?: ModelSelection;
     }
   | {
       kind: "thinking";
@@ -1404,6 +1407,8 @@ export function deriveMessagesTimelineRows(input: {
   /** Native subagent work has no app run; runless entries form the live response. */
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
+  activeTurnModelSelection?: ModelSelection | null;
+  activeTurnActualModel?: string | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   supportsConversationRollback: boolean;
   threadStartCheckpointReady?: boolean;
@@ -1663,6 +1668,14 @@ export function deriveMessagesTimelineRows(input: {
         input.activeTurnStartedAt ??
         null,
       ...(activeCompactionRunId !== null ? { compacting: true as const } : {}),
+      ...(input.activeTurnActualModel != null &&
+      input.activeTurnModelSelection != null &&
+      input.activeTurnActualModel !== input.activeTurnModelSelection.model
+        ? {
+            actualModel: input.activeTurnActualModel,
+            modelSelection: input.activeTurnModelSelection,
+          }
+        : {}),
     });
   };
   let hasActivityRow = false;

@@ -3,6 +3,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
+import type { EnvironmentId, ModelSelection } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import { EMPTY_SERVER_PROVIDERS, providersIgnoringCheckedAtAtom } from "../../state/server";
+import { getTriggerDisplayModelName } from "./providerIconUtils";
 
 export const MESSAGE_HEADING_LEVEL = 3;
 
@@ -50,6 +54,37 @@ export function ActivityShimmerOverlay({ children }: { children: ReactNode }) {
       <span className="live-activity-focus-counter block">
         <span className="live-activity-focus-aligned block text-foreground">{children}</span>
       </span>
+    </span>
+  );
+}
+
+export function ModelTransitionChip({
+  modelSelection,
+  actualModel,
+  environmentId,
+}: {
+  readonly modelSelection: ModelSelection;
+  readonly actualModel: string;
+  readonly environmentId: EnvironmentId;
+}) {
+  const providers =
+    useAtomValue(providersIgnoringCheckedAtAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const provider = providers.find(
+    (candidate) => candidate.instanceId === modelSelection.instanceId,
+  );
+  const describe = (slug: string) => {
+    const model = provider?.models.find((candidate) => candidate.slug === slug);
+    return provider !== undefined && model !== undefined
+      ? getTriggerDisplayModelName(model, provider.driver)
+      : slug;
+  };
+  return (
+    <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+      <span className="opacity-60">{describe(modelSelection.model)}</span>
+      <span aria-hidden="true" className="px-0.5">
+        →
+      </span>
+      {describe(actualModel)}
     </span>
   );
 }

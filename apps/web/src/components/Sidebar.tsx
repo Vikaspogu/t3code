@@ -331,6 +331,7 @@ const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 const PINNED_SHELF_EXPANDED_KEY = "t3code:sidebar:pinned-expanded";
+const IDLE_SHELF_EXPANDED_KEY = "t3code:sidebar:idle-expanded";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -481,6 +482,11 @@ function useSidebarThreads(input: {
     true,
     Schema.Boolean,
   );
+  const [idleShelfExpanded, setIdleShelfExpanded] = useLocalStorage(
+    IDLE_SHELF_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
@@ -547,6 +553,9 @@ function useSidebarThreads(input: {
   const visiblePinnedThreads = pinnedShelfExpanded
     ? pinnedThreads
     : routeThreadOnly(pinnedThreads, routeRowThreadKey);
+  const visibleActiveThreads = idleShelfExpanded
+    ? activeThreads
+    : routeThreadOnly(activeThreads, routeRowThreadKey);
   const projectFolders =
     folderGroups === null
       ? null
@@ -570,7 +579,7 @@ function useSidebarThreads(input: {
   const orderedThreads = [
     ...visiblePinnedThreads,
     ...(projectFolders === null
-      ? activeThreads
+      ? visibleActiveThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
@@ -615,6 +624,8 @@ function useSidebarThreads(input: {
     pinnedShelfExpanded,
     togglePinnedShelf: () => setPinnedShelfExpanded((value) => !value),
     pinnedShelfDropAllowed,
+    idleShelfExpanded,
+    toggleIdleShelf: () => setIdleShelfExpanded((value) => !value),
     projectFolders,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
@@ -624,6 +635,7 @@ function useSidebarThreads(input: {
     visibleSnoozedThreads,
     visibleWorkingThreads,
     visiblePinnedThreads,
+    visibleActiveThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
     settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
@@ -1347,12 +1359,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     pinnedShelfExpanded,
     togglePinnedShelf,
     pinnedShelfDropAllowed,
+    idleShelfExpanded,
+    toggleIdleShelf,
     projectFolders,
     toggleProjectFolder,
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
     visiblePinnedThreads,
+    visibleActiveThreads,
     orderedThreadKeys,
     threadByKey,
     settledThreadKeys,
@@ -1965,7 +1980,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const pinnedRows = rowsOf(visiblePinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
+    // Folders replace the Idle shelf with their own collapsible groups.
+    if (!hasProjectFolders && activeThreads.length > 0) {
+      items.push({ kind: "marker", marker: "active-header" });
+    }
+    const activeRows = rowsOf(visibleActiveThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
     if (workingThreads.length > 0) {
@@ -2019,6 +2038,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const listMotionPass = { layoutKey: listMotionLayoutKey, animate: listMotionAnimate };
   const shelfExpansionKey = [
     pinnedShelfExpanded,
+    idleShelfExpanded,
     workingShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
@@ -3546,9 +3566,39 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarDragBoundary
                                 key="pinned-divider"
                                 marker="pinned-divider"
-                                label="Active"
-                                visible={from !== null}
+                                label="Idle"
+                                // The Idle shelf header already labels this drop zone.
+                                visible={
+                                  from !== null &&
+                                  !sidebarListItems.some(
+                                    (entry) =>
+                                      entry.kind === "marker" && entry.marker === "active-header",
+                                  )
+                                }
                                 isDropTarget={dragTargetSection === "active"}
+                              />,
+                            );
+                            break;
+                          case "active-header":
+                            items.push(
+                              <SidebarSectionHeader
+                                key="active-shelf-header"
+                                marker="active-header"
+                                label="Idle"
+                                count={activeThreads.length}
+                                hiddenThreads={
+                                  idleShelfExpanded
+                                    ? undefined
+                                    : activeThreads.filter(
+                                        (thread) => threadShellKey(thread) !== routeRowThreadKey,
+                                      )
+                                }
+                                dragging={from !== null}
+                                isDropTarget={dragTargetSection === "active"}
+                                toggle={{
+                                  expanded: idleShelfExpanded,
+                                  onToggle: toggleIdleShelf,
+                                }}
                               />,
                             );
                             break;
@@ -3557,7 +3607,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarSectionPlaceholder
                                 key="active-placeholder"
                                 marker="active-placeholder"
-                                label="Active"
+                                label="Idle"
                                 showHint={
                                   from !== null &&
                                   (activeThreads.length === 0 ||

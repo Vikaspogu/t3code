@@ -8,6 +8,7 @@ import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
 import { announcedRun, isDetailBehindShell } from "./chat/threadActivityAnnouncement";
 import {
   deriveAvailableRevertTurnCounts,
+  deriveActiveTurnModels,
   deriveThreadPendingBackgroundTasks,
   deriveWorkspaceMutationId,
   presentThreadShellFromProjection,
@@ -1462,6 +1463,10 @@ export default function ChatView(props: ChatViewProps) {
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
     runlessWorkStartedAt;
   const activeRunPreparing = activeActivityRun?.status === "preparing";
+  const activeTurnModels =
+    isServerThread && serverProjection !== null
+      ? deriveActiveTurnModels(serverProjection, activeActivityRun?.runId ?? null)
+      : null;
   const sendQueuesBehindSetup =
     isServerThread && (activeRunPreparing || activeActivityRun?.status === "starting");
   const [setupQueueSendThreadKey, setSetupQueueSendThreadKey] = useState<string | null>(null);
@@ -3421,6 +3426,8 @@ export default function ChatView(props: ChatViewProps) {
                   activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? null
                 }
                 activeTurnStartedAt={activeWorkStartedAt}
+                activeTurnModelSelection={activeTurnModels?.modelSelection ?? null}
+                activeTurnActualModel={activeTurnModels?.actualModel ?? null}
                 worktreeSetup={worktreeSetup}
                 onCancelWorktreeSetup={onCancelWorktreeSetupStable}
                 retryableWorkspacePreparationRunIds={retryableWorkspacePreparationRunIds}

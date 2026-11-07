@@ -491,6 +491,20 @@ describe("sidebar drag projection", () => {
     expect(result.get("s")?.y).toBe(13);
   });
 
+  it("keeps the Idle shelf header in place while a row moves into the shelf", () => {
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      marker("active-header"),
+      thread("a", "active"),
+      settledHeader,
+      thread("s", "settled"),
+    ];
+    const result = preview({ items, settledOrder: [], settledExpanded: true }, "s", "a");
+    expect(result.get(sidebarMarkerId("active-header"))?.scaleY).toBe(1);
+  });
+
   it("keeps a collapsed settled target without inserting a hidden row", () => {
     const items = [
       pinnedHeader,

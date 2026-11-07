@@ -70,6 +70,7 @@ import { SidebarNavigationShell } from "./sidebar-navigation-shell";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2IdleShelfHeader,
   ThreadListV2PinnedShelfHeader,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
@@ -281,11 +282,13 @@ function ThreadNavigationSidebarPane(
     snoozedShelfExpanded,
     workingShelfEnabled,
     pinnedShelfExpanded,
+    idleShelfExpanded,
     workingShelfExpanded,
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
     togglePinnedShelf,
+    toggleIdleShelf,
   } = useThreadListV2ShelfPreferences();
   const now = useThreadListNow(threads);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
@@ -326,6 +329,7 @@ function ThreadNavigationSidebarPane(
     shelfPreferencesLoaded,
     workingShelfEnabled,
     pinnedShelfExpanded,
+    idleShelfExpanded,
     workingShelfExpanded,
     snoozedShelfExpanded,
     settledShelfExpanded,
@@ -633,6 +637,17 @@ function ThreadNavigationSidebarPane(
             disabled={item.disabled}
             expanded={item.expanded}
             onToggle={togglePinnedShelf}
+            dot={item.dot}
+            pane="sidebar"
+          />
+        );
+      case "v2-idle-shelf":
+        return (
+          <ThreadListV2IdleShelfHeader
+            count={item.count}
+            disabled={item.disabled}
+            expanded={item.expanded}
+            onToggle={toggleIdleShelf}
             dot={item.dot}
             pane="sidebar"
           />

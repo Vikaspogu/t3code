@@ -736,6 +736,49 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect(
+    "reports the physical model mid-turn as soon as the first assistant message starts",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("pi/resilient"),
+          runtimePolicy,
+        });
+        yield* startTurn(
+          runtime,
+          providerThread,
+          "default",
+          [],
+          "Hello pi",
+          modelSelection("pi/resilient"),
+        );
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({
+          type: "message_start",
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: null,
+            provider: "glm",
+            model: "glm-4.6",
+          },
+        });
+        const live = yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.actualModel !== undefined,
+        );
+        assert.equal(
+          live.type === "provider_turn.updated" && live.providerTurn.actualModel,
+          "glm/glm-4.6",
+        );
+        assert.equal(live.type === "provider_turn.updated" && live.providerTurn.status, "running");
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect.each([false, true])(
     "serializes rollback fork hooks with native wake ownership, wake=%s",
     (nativeWake) =>

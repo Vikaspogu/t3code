@@ -6,6 +6,7 @@ import {
   restorePlanFollowUpComposer,
   snapshotComposerSend,
   withMessageContext,
+  deriveActiveTurnModels,
   deriveAvailableRevertTurnCounts,
   deriveWorkspaceMutationId,
 } from "./ChatView.logic";
@@ -1257,6 +1258,30 @@ describe("deriveAvailableRevertTurnCounts", () => {
   it("offers nothing without a provider session to rewind", () => {
     expect(deriveAvailableRevertTurnCounts(projection({ providerSessionId: null })).size).toBe(0);
     expect(deriveAvailableRevertTurnCounts(null).size).toBe(0);
+  });
+});
+
+describe("deriveActiveTurnModels", () => {
+  it("returns the active run's selection and its latest turn's actual model", () => {
+    const base = makeThreadProjectionFixture();
+    const runId = RunId.make("run-1");
+    const projection = {
+      ...base,
+      runs: [
+        { id: runId, activeAttemptId: "attempt-2", modelSelection: base.thread.modelSelection },
+      ],
+      providerTurns: [
+        { runAttemptId: "attempt-1", ordinal: 3, actualModel: "stale/model" },
+        { runAttemptId: "attempt-2", ordinal: 2, actualModel: "openai/gpt-live" },
+        { runAttemptId: "attempt-2", ordinal: 1, actualModel: "openai/gpt-old" },
+      ],
+    } as unknown as ReturnType<typeof makeThreadProjectionFixture>;
+
+    expect(deriveActiveTurnModels(projection, runId)).toEqual({
+      modelSelection: base.thread.modelSelection,
+      actualModel: "openai/gpt-live",
+    });
+    expect(deriveActiveTurnModels(projection, null)).toBeNull();
   });
 });
 
