@@ -11,8 +11,6 @@ import {
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
-  belongsInSidebarWorkingShelf,
-  isSidebarEnvironmentDisconnected,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   resolveSidebarSweepKeys,
@@ -286,7 +284,13 @@ describe("resolveSidebarThreadStatus", () => {
     ).toBe(false);
   });
 
-  it("reports failed only while the latest run failed", () => {
+  it("reports worktree setup as preparing, and failed only while the latest run failed", () => {
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        runtime: { ...runtime, status: "preparing" as const },
+      }),
+    ).toBe("preparing");
     expect(
       resolveSidebarThreadStatus({
         ...idle,
@@ -624,9 +628,44 @@ describe("getFallbackThreadIdAfterDelete", () => {
       deletedThreadId: ThreadId.make("thread-active"),
       deletedThreadIds: new Set([ThreadId.make("thread-active"), ThreadId.make("thread-newest")]),
       sortOrder: "created_at",
+      now: "2026-03-09T10:10:00.000Z",
     });
 
     expect(fallbackThreadId).toBe(ThreadId.make("thread-next"));
+  });
+
+  it.each([
+    [
+      "snoozed",
+      { snoozedUntil: "2099-01-01T00:00:00.000Z", snoozedAt: "2026-03-09T10:06:00.000Z" },
+    ],
+    ["settled", { settledOverride: "settled", settledAt: "2026-03-09T10:06:00.000Z" }],
+  ] as const)("skips a %s thread parked on its shelf", (_state, parked) => {
+    const fallbackThreadId = getFallbackThreadIdAfterDelete({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-visible"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+          updatedAt: "2026-03-09T10:01:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-parked"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+          updatedAt: "2026-03-09T10:06:00.000Z",
+          ...parked,
+        }),
+        makeThread({
+          id: ThreadId.make("thread-active"),
+          createdAt: "2026-03-09T10:03:00.000Z",
+          updatedAt: "2026-03-09T10:03:00.000Z",
+        }),
+      ],
+      deletedThreadId: ThreadId.make("thread-active"),
+      sortOrder: "created_at",
+      now: "2026-03-09T10:10:00.000Z",
+    });
+
+    expect(fallbackThreadId).toBe(ThreadId.make("thread-visible"));
   });
 });
 
@@ -969,38 +1008,6 @@ describe("Working shelf (beta)", () => {
     ).toBe(false);
   });
 
-  it.each([
-    ["connected", true, false],
-    ["connected", false, true],
-    ["connecting", false, false],
-    ["reconnecting", false, true],
-    ["offline", false, true],
-    ["error", false, true],
-    ["unsupported", false, true],
-    ["available", false, true],
-  ] as const)(
-    "lists threads outside the shelf on a %s environment: %s",
-    (phase, shellIsLive, disconnected) => {
-      expect(isSidebarEnvironmentDisconnected(phase, shellIsLive)).toBe(disconnected);
-    },
-  );
-
-  it("lists a running thread outside the shelf while its environment is disconnected", () => {
-    const thread = { ...idle, runtime, environmentId: localEnvironmentId };
-    const shelve = (disconnected: ReadonlyArray<EnvironmentId>, enabled = true) =>
-      belongsInSidebarWorkingShelf(thread, {
-        enabled,
-        disconnectedEnvironmentIds: new Set(disconnected),
-        isWorking: isSidebarThreadWorking,
-      });
-
-    expect(shelve([])).toBe(true);
-    expect(shelve([localEnvironmentId])).toBe(false);
-    expect(shelve([])).toBe(true);
-    expect(shelve([EnvironmentId.make("environment-other")])).toBe(true);
-    expect(shelve([], false)).toBe(false);
-  });
-
   describe("sortInboxThreadsByReturn", () => {
     const thread = (
       id: string,
@@ -1081,13 +1088,30 @@ describe("Working shelf (beta)", () => {
       expect(resolveSidebarDropVerb("active", "working")).toBeNull();
     });
 
-    it("does not drop into a collapsed Pinned shelf", () => {
+    it("does not drop into collapsed shelves or block leaving them", () => {
       expect(resolveSidebarDropTarget(items, "a1", "p1", false)).toBeNull();
       // Leaving the shelf still works when only the open pinned row is visible.
       expect(resolveSidebarDropTarget(items, "p1", "a2", false)).toEqual({
         section: "active",
         pinnedOrder: [],
         activeOrder: ["a1", "a2", "p1"],
+      });
+      const collapsedIdle = [
+        marker("pinned-header"),
+        row("p1", "pinned"),
+        marker("pinned-divider"),
+        marker("active-header"),
+        marker("active-placeholder"),
+        row("a1", "active"),
+        marker("settled-header"),
+        row("s1", "settled"),
+      ];
+      expect(resolveSidebarDropTarget(collapsedIdle, "a1", "a1", true, false)).toBeNull();
+      expect(resolveSidebarDropTarget(collapsedIdle, "p1", "a1", true, false)).toBeNull();
+      expect(resolveSidebarDropTarget(collapsedIdle, "a1", "p1", true, false)).toEqual({
+        section: "pinned",
+        pinnedOrder: ["a1", "p1"],
+        activeOrder: [],
       });
     });
 

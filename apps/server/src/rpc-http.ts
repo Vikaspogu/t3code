@@ -34,7 +34,7 @@ import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
-import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
+import { withOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
@@ -45,6 +45,7 @@ import {
   layerWsRpc,
   readClientAnalyticsProps,
   readClientOwners,
+  readSettingsClient,
 } from "./ws.ts";
 
 // Prisma blocks WebSocket upgrades; serve the same RPC group over NDJSON with per-request authentication.
@@ -108,7 +109,7 @@ export const layer = Layer.unwrap(
           // Fresh-per-request mirrors the per-upgrade isolation of /ws.
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffect();
           yield* RpcServer.make(ServerWsRpcGroup, WS_RPC_SERVER_OPTIONS).pipe(
-            Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
+            Effect.provideService(RpcServer.Protocol, withOutputWindow(protocol)),
             Effect.provide(
               Layer.merge(RpcAuthorization.layer(session.scopes), rpcInstrumentationLayer),
             ),
@@ -117,7 +118,13 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(session, clientAnalyticsProps, serverBrowser, reportProfiles).pipe(
+            layerWsRpc(
+              session,
+              clientAnalyticsProps,
+              serverBrowser,
+              reportProfiles,
+              readSettingsClient(requestUrl.value),
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerNdjson),
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.

@@ -96,7 +96,7 @@ const make = () => {
             Effect.forkIn(child),
           );
           return yield* restore(Fiber.await(fiber)).pipe(
-            Effect.flatMap((result) => result),
+            Effect.flatten,
             Effect.onExit((result) =>
               Exit.isFailure(result) ? Scope.close(child, Exit.void) : Effect.void,
             ),

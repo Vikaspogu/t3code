@@ -10,7 +10,7 @@ import {
   MessageId,
   type OrbitVoiceTask,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -73,7 +73,7 @@ const make = Effect.gen(function* () {
   const host = yield* T3Host.VoiceHost;
   const native = yield* NativeVoice.NativeVoice;
   const serviceScope = yield* Scope.Scope;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const calls = new Map<AuthSessionId, Call>();
   const publish = Effect.fn("VoiceCalls.publish")(function* (
     call: Call,
@@ -417,8 +417,8 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-      const commandId = CommandId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
-      const messageId = MessageId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+      const commandId = CommandId.make(yield* crypto.uuidV4());
+      const messageId = MessageId.make(yield* crypto.uuidV4());
       const call = yield* get(owner, input.callId);
       if (call.value.state !== "connected")
         return yield* new OrbitVoiceError({

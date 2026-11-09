@@ -108,6 +108,15 @@ export const getSystemLocale = DesktopIpc.makeSyncIpcMethod({
   }),
 });
 
+export const getPreferredSystemLanguages = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_PREFERRED_SYSTEM_LANGUAGES_CHANNEL,
+  result: Schema.Array(Schema.String),
+  handler: Effect.fn("desktop.ipc.window.getPreferredSystemLanguages")(function* () {
+    const electronApp = yield* ElectronApp.ElectronApp;
+    return yield* electronApp.preferredSystemLanguages;
+  }),
+});
+
 export const getWindowFullscreenState = DesktopIpc.makeSyncIpcMethod({
   channel: IpcChannels.GET_WINDOW_FULLSCREEN_STATE_CHANNEL,
   result: Schema.Boolean,
@@ -316,6 +325,12 @@ export const openExternal = DesktopIpc.makeIpcMethod({
 
 const READ_MEDIA_MAX_BYTES = 256 * 1024 * 1024;
 
+// No URL field: media URLs can carry signed query tokens.
+class MediaReadError extends Schema.TaggedError<MediaReadError>()("MediaReadError", {
+  message: Schema.String,
+  cause: Schema.Defect(),
+}) {}
+
 // Read public media blocked by CORS without exposing the session's private responses.
 export const readMedia = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.READ_MEDIA_CHANNEL,
@@ -337,28 +352,31 @@ export const readMedia = DesktopIpc.makeIpcMethod({
       return null;
     }
     const session = yield* ElectronMediaSession.ElectronMediaSession;
-    return yield* Effect.tryPromise(async () => {
-      const response = await session.fetch(url, { credentials: "omit" });
-      const mimeType = response.headers.get("content-type") ?? "";
-      if (!response.ok || !response.body) {
-        await response.body?.cancel();
-        return { status: response.ok ? 502 : response.status, mimeType, data: new Uint8Array() };
-      }
-      if (!/^(?:image|audio|video)\//i.test(mimeType)) {
-        await response.body.cancel();
-        return { status: 415, mimeType, data: new Uint8Array() };
-      }
-      // The whole body crosses IPC, so stop before a huge file can exhaust main-process memory.
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      for await (const chunk of response.body) {
-        size += chunk.byteLength;
-        if (size > READ_MEDIA_MAX_BYTES) {
-          return { status: 413, mimeType, data: new Uint8Array() };
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const response = await session.fetch(url, { credentials: "omit" });
+        const mimeType = response.headers.get("content-type") ?? "";
+        if (!response.ok || !response.body) {
+          await response.body?.cancel();
+          return { status: response.ok ? 502 : response.status, mimeType, data: new Uint8Array() };
         }
-        chunks.push(chunk);
-      }
-      return { status: response.status, mimeType, data: Buffer.concat(chunks) };
+        if (!/^(?:image|audio|video)\//i.test(mimeType)) {
+          await response.body.cancel();
+          return { status: 415, mimeType, data: new Uint8Array() };
+        }
+        // The whole body crosses IPC, so stop before a huge file can exhaust main-process memory.
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        for await (const chunk of response.body) {
+          size += chunk.byteLength;
+          if (size > READ_MEDIA_MAX_BYTES) {
+            return { status: 413, mimeType, data: new Uint8Array() };
+          }
+          chunks.push(chunk);
+        }
+        return { status: response.status, mimeType, data: Buffer.concat(chunks) };
+      },
+      catch: (cause) => new MediaReadError({ message: "Could not read media.", cause }),
     }).pipe(Effect.orElseSucceed(() => null));
   }),
 });

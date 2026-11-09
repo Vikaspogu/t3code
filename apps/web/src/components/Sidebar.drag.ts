@@ -102,6 +102,7 @@ export function createSidebarSortingStrategy(input: {
   slimHeight?: number;
   boundaryLabelHeight?: number;
   pinnedDropAllowed?: boolean;
+  activeDropAllowed?: boolean;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
@@ -118,6 +119,7 @@ export function createSidebarSortingStrategy(input: {
       active.key,
       sidebarListItemId(over),
       input.pinnedDropAllowed ?? true,
+      input.activeDropAllowed ?? true,
     );
     if (!target) return [];
     const groups: Record<SidebarSection, ThreadItem[]> = {
