@@ -560,6 +560,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             version,
             signed,
             false,
+            false,
             undefined,
             undefined,
           );
