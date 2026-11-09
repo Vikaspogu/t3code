@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { CodexSettings, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
@@ -100,7 +101,11 @@ it.effect("a credential peer changing blocks runtime resolution before spawn", (
       .pipe(Effect.provide(registry(related)), Effect.exit);
     assert.isTrue(Exit.isFailure(result));
     assert.isFalse(entered);
-  }).pipe(Effect.provide(Layer.mergeAll(RuntimeAccess.layer, NodeServices.layer))),
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(RuntimeAccess.layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    ),
+  ),
 );
 
 it.effect("shared managed signout interrupts voice startup and releases its resources", () =>
@@ -140,7 +145,11 @@ it.effect("shared managed signout interrupts voice startup and releases its reso
     yield* peerAuth.logout(Effect.void);
     yield* Deferred.await(released);
     assert.isTrue(Exit.isFailure(yield* Fiber.await(startup)));
-  }).pipe(Effect.provide(Layer.mergeAll(RuntimeAccess.layer, NodeServices.layer))),
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(RuntimeAccess.layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    ),
+  ),
 );
 
 it.effect("shared signout closes an already-open voice resource", () =>
@@ -175,7 +184,11 @@ it.effect("shared signout closes an already-open voice resource", () =>
     assert.isFalse(released);
     yield* peerAuth.logout(Effect.void);
     assert.isTrue(released);
-  }).pipe(Effect.provide(Layer.mergeAll(RuntimeAccess.layer, NodeServices.layer))),
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(RuntimeAccess.layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+    ),
+  ),
 );
 
 it.effect("uses the captured managed account resolver instead of local credentials", () =>

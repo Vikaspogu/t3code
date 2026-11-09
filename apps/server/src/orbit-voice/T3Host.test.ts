@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -266,7 +267,7 @@ const makeFixture = (
           getEnvironmentId: Effect.succeed(EnvironmentId.make("voice-fixture")),
         }),
       ),
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     );
     const registry = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
       getInstance: () => Ref.get(currentInstance),

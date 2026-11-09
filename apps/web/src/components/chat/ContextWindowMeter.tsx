@@ -1,10 +1,13 @@
 import { Button } from "../ui/button";
-import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
+import { formatContextWindowTokens } from "~/lib/contextWindow";
+import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import {
-  formatContextWindowCompactionMessage,
-  formatContextWindowCost,
-} from "./ContextWindowMeter.logic";
+import { formatContextWindowCompactionMessage } from "./compaction.logic";
+
+function formatContextWindowCost(cost: { amount: number; currency: string }): string {
+  const digits = Math.abs(cost.amount) > 0 && Math.abs(cost.amount) < 0.01 ? 4 : 2;
+  return `${cost.currency} ${cost.amount.toFixed(digits)}`;
+}
 import { Minimize2Icon } from "lucide-react";
 import { composerFloatingLayerProps } from "./composerEventScope";
 
@@ -20,12 +23,9 @@ function formatPercentage(value: number | null): string | null {
 
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
-  modelDisplayName?: string | null;
   onCompact?: (() => void) | undefined;
-  compactDisabled?: boolean | undefined;
-  compactDisabledReason?: string | null | undefined;
 }) {
-  const { usage, modelDisplayName, onCompact, compactDisabled, compactDisabledReason } = props;
+  const { usage, onCompact } = props;
   const usedPercentage = formatPercentage(usage.usedPercentage);
   const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
   const radius = 9.75;
@@ -149,34 +149,22 @@ export function ContextWindowMeter(props: {
           ) : null}
           {usage.compactsAutomatically ? (
             <div className="mt-1 text-pretty text-secondary-label text-2xs font-medium">
-              {formatContextWindowCompactionMessage(modelDisplayName, usage.autoCompactThreshold)}
+              {formatContextWindowCompactionMessage(usage.autoCompactThreshold)}
             </div>
           ) : null}
           {onCompact ? (
-            <>
-              <Button
-                size="xs"
-                variant="outline"
-                className="mt-1 w-full justify-center"
-                disabled={compactDisabled}
-                onClick={onCompact}
-              >
-                <Minimize2Icon aria-hidden="true" />
-                Compact context
-              </Button>
-              {compactDisabled && compactDisabledReason ? (
-                <div className="text-pretty text-secondary-label text-2xs">
-                  {compactDisabledReason}
-                </div>
-              ) : null}
-            </>
+            <Button
+              size="xs"
+              variant="outline"
+              className="mt-1 w-full justify-center"
+              onClick={onCompact}
+            >
+              <Minimize2Icon aria-hidden="true" />
+              Compact context
+            </Button>
           ) : null}
         </div>
       </PopoverPopup>
     </Popover>
   );
-}
-
-export function ContextWindowMeterPlaceholder() {
-  return <span aria-hidden="true" className="size-7 shrink-0" />;
 }
