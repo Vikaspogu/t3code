@@ -3157,6 +3157,84 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("projects rpiv-todo snapshots as one todo list per turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const todoEnd = (
+        toolCallId: string,
+        tasks: ReadonlyArray<Record<string, unknown>>,
+        parentToolCallId?: string,
+      ) =>
+        fake.emit({
+          type: "tool_execution_end",
+          toolCallId,
+          ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
+          toolName: "todo",
+          isError: false,
+          result: {
+            content: [{ type: "text", text: "ok" }],
+            details: { action: "update", params: {}, tasks, nextId: 4 },
+          },
+        });
+      yield* todoEnd("call_todo_1", [
+        { id: 1, subject: "Read code", status: "in_progress" },
+        { id: 2, subject: "Write fix", status: "pending" },
+        { id: 3, subject: "Dropped", status: "deleted" },
+      ]);
+      const first = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+      );
+      yield* todoEnd(
+        "call_todo_2",
+        [
+          { id: 1, subject: "Read code", status: "completed" },
+          { id: 2, subject: "Write fix", status: "completed" },
+        ],
+        "call_codemode_1",
+      );
+      const plan = yield* takeEvent(
+        (event) => event.type === "plan.updated" && event.plan.status === "completed",
+      );
+      const second = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+      );
+      yield* todoEnd("call_todo_3", [{ id: 1, subject: "Read code", status: "deleted" }]);
+      const cleared = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+      );
+      assert.isTrue(first.type === "turn_item.updated" && first.turnItem.type === "todo_list");
+      assert.isTrue(second.type === "turn_item.updated" && second.turnItem.type === "todo_list");
+      if (first.type !== "turn_item.updated" || first.turnItem.type !== "todo_list") return;
+      if (second.type !== "turn_item.updated" || second.turnItem.type !== "todo_list") return;
+      assert.deepStrictEqual(
+        first.turnItem.steps.map(({ text, status }) => ({ text, status })),
+        [
+          { text: "Read code", status: "running" },
+          { text: "Write fix", status: "pending" },
+        ],
+      );
+      assert.strictEqual(second.turnItem.id, first.turnItem.id);
+      assert.strictEqual(second.turnItem.planId, first.turnItem.planId);
+      assert.strictEqual(second.turnItem.status, "completed");
+      assert.isTrue(plan.type === "plan.updated" && plan.plan.id === first.turnItem.planId);
+      assert.isTrue(
+        cleared.type === "turn_item.updated" &&
+          cleared.turnItem.type === "todo_list" &&
+          cleared.turnItem.status === "completed" &&
+          cleared.turnItem.steps.length === 0,
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("persists edit patches and write content on file change items", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

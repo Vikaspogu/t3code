@@ -16,6 +16,8 @@ import {
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
+  type OrchestrationV2PlanStep,
+  type PlanId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
@@ -145,8 +147,8 @@ const PiProviderCapabilitiesV2 = {
     approvalsCanOriginateFromSubagents: false,
   },
   planning: {
-    emitsPlanUpdated: false,
-    emitsTodoList: false,
+    emitsPlanUpdated: true,
+    emitsTodoList: true,
     emitsProposedPlan: false,
     supportsStructuredQuestions: true,
     planDeltasHaveItemIds: false,
@@ -301,6 +303,24 @@ function piToolOutput(result: unknown, toolName: string): unknown {
   };
 }
 
+// `details.tasks` is the full list snapshot the rpiv-todo extension returns on every `todo` call.
+function piTodoSteps(tasks: unknown): ReadonlyArray<OrchestrationV2PlanStep> | undefined {
+  if (!Array.isArray(tasks)) return undefined;
+  return tasks.flatMap((task, index) => {
+    const status = recordString(task, "status");
+    const text = recordString(task, "subject")?.trim() ?? "";
+    if (status === "deleted" || text.length === 0) return [];
+    return [
+      {
+        id: `todo-${recordNumber(task, "id") ?? index + 1}`,
+        text,
+        status:
+          status === "completed" ? "completed" : status === "in_progress" ? "running" : "pending",
+      },
+    ];
+  });
+}
+
 function providerRef(
   nativeId: string,
   strength: "strong" | "weak" = "strong",
@@ -374,6 +394,7 @@ interface ActivePiTurn {
   failure: ReturnType<typeof makeProviderFailure> | null;
   rejectedPromptFailure: ReturnType<typeof makeProviderFailure> | null;
   stopTreeRefs?: PiTurnTreeRefs | null;
+  todoPlanId: PlanId | null;
 }
 
 interface PiTurnTreeRefs {
@@ -1255,6 +1276,62 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         if (toolName === "subagent") {
           yield* emitSubagentTasks(turn, toolCallId, resultRecord, completed);
         }
+        if (toolName === "todo" && completed) {
+          const steps = piTodoSteps(recordField(recordField(resultRecord, "details"), "tasks"));
+          if (steps !== undefined) yield* emitTodoList(turn, steps);
+        }
+      });
+
+      const emitTodoList = Effect.fnUntraced(function* (
+        turn: ActivePiTurn,
+        steps: ReadonlyArray<OrchestrationV2PlanStep>,
+      ) {
+        const now = yield* DateTime.now;
+        if (turn.todoPlanId === null) {
+          turn.todoPlanId = yield* idAllocator.allocate.plan({
+            threadId: turn.turnInput.threadId,
+            runId: turn.turnInput.runId,
+            driver: PI_PROVIDER,
+          });
+        }
+        const planId = turn.todoPlanId;
+        const nativeItemId = `${turn.providerTurn.id}:todo`;
+        const completed = steps.every((step) => step.status === "completed");
+        const status = completed ? "completed" : "running";
+        yield* emitItemNode(
+          turn,
+          nativeItemId,
+          "todo_list",
+          status,
+          turn.startedAt,
+          completed ? now : null,
+        );
+        yield* emit({
+          type: "plan.updated",
+          driver: PI_PROVIDER,
+          plan: {
+            id: planId,
+            threadId: turn.turnInput.threadId,
+            runId: turn.turnInput.runId,
+            nodeId: idAllocator.derive.nodeFromProviderItem({ driver: PI_PROVIDER, nativeItemId }),
+            kind: "todo_list",
+            status: completed ? "completed" : "active",
+            steps: [...steps],
+          },
+        });
+        yield* emit({
+          type: "turn_item.updated",
+          driver: PI_PROVIDER,
+          turnItem: {
+            ...baseItemFields(turn, nativeItemId, turn.startedAt, now),
+            status,
+            title: "Todo list",
+            completedAt: completed ? now : null,
+            type: "todo_list",
+            planId,
+            steps: [...steps],
+          },
+        });
       });
 
       const emitSubagentTasks = Effect.fnUntraced(function* (
@@ -2802,6 +2879,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               activeProviderRetry: null,
               failure: null,
               rejectedPromptFailure: null,
+              todoPlanId: null,
             };
             // Lock only install/send/start events; correlated setup must leave the pump free for dialogs.
             yield* Effect.gen(function* () {
