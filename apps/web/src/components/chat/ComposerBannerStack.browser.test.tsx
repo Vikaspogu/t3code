@@ -149,3 +149,32 @@ it("opens the details of a long notice right above its button", async () => {
     expect(gap).toBeLessThan(8);
   });
 });
+
+it("shows a collapsible notice's details only after its chevron opens it", async () => {
+  await using screen = await render(
+    <ComposerBannerStack
+      items={[
+        {
+          id: "tasks",
+          variant: "default",
+          icon: null,
+          collapsible: true,
+          title: "Tasks 1/3",
+          description: "Current step",
+          children: <span>Every step</span>,
+        },
+      ]}
+    />,
+  );
+
+  await expect.element(screen.getByText("Current step")).toBeVisible();
+  await expect.element(screen.getByText("Every step")).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+
+  await expect.element(screen.getByText("Every step")).toBeVisible();
+  await expect.element(screen.getByText("Current step")).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("button", { name: "Hide details" }))
+    .toHaveAttribute("aria-expanded", "true");
+});
