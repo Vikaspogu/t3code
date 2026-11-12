@@ -6,6 +6,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-runtime/state/shell";
+import type { ThreadStructureTurnItem } from "@t3tools/client-runtime/state/models";
 import {
   presentPendingBackgroundWork,
   presentProviderGoal,
@@ -16,7 +17,10 @@ import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-lab
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 import {
+  CheckIcon,
   CircleDashedIcon,
+  CircleDotIcon,
+  CircleIcon,
   CircleStopIcon,
   GitBranchIcon,
   MessageCircleIcon,
@@ -29,6 +33,7 @@ import { Fragment } from "react";
 import { tickTextContent } from "~/lib/tickTextContent";
 import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ComposerBanner } from "./ComposerBanner";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import type { ThreadNowItem } from "./ThreadNow";
 
@@ -39,8 +44,77 @@ export function extensionStatusBannerItem(
   return {
     id: "pi-extension-status",
     variant: "default",
-    icon: <span>▸</span>,
-    title: <output>{`Pi · ${statuses.map((status) => status.text).join(" · ")}`}</output>,
+    icon: null,
+    collapsible: true,
+    title: "Pi",
+    description: <output>{statuses.map((status) => status.text).join(" · ")}</output>,
+    children: (
+      <ComposerBanner.Scroll>
+        {statuses.map((status) => (
+          <div key={status.key} className="flex gap-3 text-sm leading-6">
+            <span className="w-28 flex-none truncate text-muted-foreground">{status.key}</span>
+            <span className="min-w-0 wrap-anywhere">{status.text}</span>
+          </div>
+        ))}
+      </ComposerBanner.Scroll>
+    ),
+  };
+}
+
+const TASK_STEP_ICONS = {
+  completed: <CheckIcon className="size-3.5 text-success" />,
+  running: <CircleDotIcon className="size-3.5 text-info" />,
+  pending: <CircleIcon className="size-3.5 text-muted-foreground" />,
+} as const;
+
+/** The newest todo list stays above the composer until every step is done or it is dismissed. */
+export function taskListBannerItem(input: {
+  readonly turnItems: ReadonlyArray<ThreadStructureTurnItem>;
+  readonly dismissedKey: string | null;
+  readonly onDismiss: (key: string) => void;
+}): ComposerBannerStackItem | null {
+  let latest: Extract<ThreadStructureTurnItem, { readonly type: "todo_list" }> | undefined;
+  for (const item of input.turnItems) {
+    if (item.type === "todo_list" && (latest === undefined || item.ordinal > latest.ordinal)) {
+      latest = item;
+    }
+  }
+  if (latest === undefined) return null;
+  const { steps } = latest;
+  const key = `${latest.id}|${steps.map((step) => `${step.id}:${step.status}`).join(",")}`;
+  if (key === input.dismissedKey) return null;
+  const done = steps.filter((step) => step.status === "completed").length;
+  if (steps.length === 0 || done === steps.length) return null;
+  const current =
+    steps.find((step) => step.status === "running") ??
+    steps.find((step) => step.status === "pending");
+  return {
+    id: "task-list",
+    variant: "default",
+    icon: null,
+    collapsible: true,
+    title: `Tasks ${done}/${steps.length}`,
+    description: current?.text,
+    dismissLabel: "Hide task list",
+    onDismiss: () => input.onDismiss(key),
+    children: (
+      <ComposerBanner.Scroll>
+        {steps.map((step) => (
+          <div key={step.id} className="flex items-center gap-2 text-sm leading-6">
+            <span className="flex-none">{TASK_STEP_ICONS[step.status]}</span>
+            <span
+              className={
+                step.status === "completed"
+                  ? "min-w-0 text-muted-foreground line-through"
+                  : "min-w-0"
+              }
+            >
+              {step.text}
+            </span>
+          </div>
+        ))}
+      </ComposerBanner.Scroll>
+    ),
   };
 }
 
