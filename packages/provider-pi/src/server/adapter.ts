@@ -1143,8 +1143,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         turn: ActivePiTurn,
         kind: PiStreamItemState["kind"],
         contentIndex: number,
+        nativeItemId = `${turn.providerTurn.id}:m${turn.messageOrdinal}:c${contentIndex}`,
       ) {
-        const nativeItemId = `${turn.providerTurn.id}:m${turn.messageOrdinal}:c${contentIndex}`;
         const existing = turn.streamItems.get(nativeItemId);
         if (existing !== undefined) return existing;
         const startedAt = yield* DateTime.now;
@@ -1176,6 +1176,40 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           { discard: true },
         );
 
+      // Pi docs: message_end.message replaces the streamed message; extensions may rewrite it.
+      const applyFinalMessage = Effect.fnUntraced(function* (turn: ActivePiTurn, content: unknown) {
+        if (!Array.isArray(content)) return yield* completeOpenStreamItems(turn);
+        const prefix = `${turn.providerTurn.id}:m${turn.messageOrdinal}:`;
+        const unused = new Set(
+          Array.from(turn.streamItems.values()).filter((item) =>
+            item.nativeItemId.startsWith(prefix),
+          ),
+        );
+        const finals: Array<readonly [PiStreamItemState, string]> = [];
+        for (const [index, block] of content.entries()) {
+          const type = recordField(block, "type");
+          const kind =
+            type === "text" ? "assistant_message" : type === "thinking" ? "reasoning" : undefined;
+          if (kind === undefined) continue;
+          const text = recordString(block, kind === "reasoning" ? "thinking" : "text") ?? "";
+          let item = Array.from(unused).find((candidate) => candidate.kind === kind);
+          if (item === undefined) {
+            item = yield* streamItemFor(turn, kind, index, `${prefix}c${index}:final`);
+          } else {
+            unused.delete(item);
+          }
+          finals.push([item, text]);
+        }
+        for (const item of unused) finals.push([item, ""]);
+        for (const [item, text] of finals) {
+          if (item.completed && item.text === text) continue;
+          const shown = item.text.length > 0;
+          item.completed = true;
+          item.text = text;
+          if (shown || text.length > 0) yield* emitStreamItem(turn, item, false);
+        }
+        yield* completeOpenStreamItems(turn);
+      });
       const emitToolItem = Effect.fnUntraced(function* (
         turn: ActivePiTurn,
         event: PiRpcRecord,
@@ -2075,7 +2109,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const modelId = recordString(message, "model");
             if (provider !== undefined && modelId !== undefined)
               turn.actualModel = `${provider}/${modelId}`;
-            yield* completeOpenStreamItems(turn);
+            yield* applyFinalMessage(turn, recordField(message, "content"));
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
               turn.failure = makeProviderFailure({
                 message: recordString(message, "errorMessage") ?? "Pi reported a model error.",

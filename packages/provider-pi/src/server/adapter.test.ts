@@ -1151,6 +1151,65 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("applies the final message_end content over streamed items", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("pi/resilient"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "Hello pi");
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "thought" },
+      });
+      yield* fake.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "streamed reply" },
+      });
+      yield* fake.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "streamed reply" },
+      });
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "REPLACED" },
+            { type: "text", text: "ADDED" },
+          ],
+          stopReason: "stop",
+        },
+      });
+      const finalMessageText = Effect.map(
+        takeEvent((event) => event.type === "message.updated" && !event.message.streaming),
+        (event) => (event.type === "message.updated" ? event.message : undefined),
+      );
+      const streamed = yield* finalMessageText;
+      const replaced = yield* finalMessageText;
+      const added = yield* finalMessageText;
+      const reasoning = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "reasoning",
+      );
+      assert.equal(streamed?.text, "streamed reply");
+      assert.equal(replaced?.text, "REPLACED");
+      assert.equal(replaced?.id, streamed?.id);
+      assert.equal(added?.text, "ADDED");
+      assert.notEqual(added?.id, streamed?.id);
+      assert.isTrue(
+        reasoning.type === "turn_item.updated" &&
+          reasoning.turnItem.type === "reasoning" &&
+          reasoning.turnItem.text === "",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("omits actualModel when the physical model matches the selection", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
