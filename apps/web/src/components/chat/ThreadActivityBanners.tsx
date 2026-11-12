@@ -23,7 +23,9 @@ import {
   CircleIcon,
   CircleStopIcon,
   GitBranchIcon,
+  ListTodoIcon,
   MessageCircleIcon,
+  PuzzleIcon,
   ShieldQuestionIcon,
   TargetIcon,
   TerminalIcon,
@@ -44,27 +46,30 @@ export function extensionStatusBannerItem(
   return {
     id: "pi-extension-status",
     variant: "default",
-    icon: null,
+    icon: <PuzzleIcon />,
     collapsible: true,
     title: "Pi",
     description: <output>{statuses.map((status) => status.text).join(" · ")}</output>,
     children: (
       <ComposerBanner.Scroll>
         {statuses.map((status) => (
-          <div key={status.key} className="flex gap-3 text-sm leading-6">
-            <span className="w-28 flex-none truncate text-muted-foreground">{status.key}</span>
-            <span className="min-w-0 wrap-anywhere">{status.text}</span>
-          </div>
+          <ComposerBanner.Row key={status.key}>
+            <ComposerBanner.Icon />
+            <ComposerBanner.Content className="items-start gap-3 leading-5">
+              <span className="w-28 flex-none truncate text-muted-foreground">{status.key}</span>
+              <span className="min-w-0 text-foreground/90 wrap-anywhere">{status.text}</span>
+            </ComposerBanner.Content>
+          </ComposerBanner.Row>
         ))}
       </ComposerBanner.Scroll>
     ),
   };
 }
 
-const TASK_STEP_ICONS = {
-  completed: <CheckIcon className="size-3.5 text-success" />,
-  running: <CircleDotIcon className="size-3.5 text-info" />,
-  pending: <CircleIcon className="size-3.5 text-muted-foreground" />,
+const TASK_STEP_STYLES = {
+  completed: { icon: <CheckIcon className="text-success" />, text: "text-muted-foreground" },
+  running: { icon: <CircleDotIcon className="text-info" />, text: "font-medium text-foreground" },
+  pending: { icon: <CircleIcon />, text: "text-foreground/80" },
 } as const;
 
 /** The newest todo list stays above the composer until every step is done or it is dismissed. */
@@ -91,7 +96,7 @@ export function taskListBannerItem(input: {
   return {
     id: "task-list",
     variant: "default",
-    icon: null,
+    icon: <ListTodoIcon />,
     collapsible: true,
     title: `Tasks ${done}/${steps.length}`,
     description: current?.text,
@@ -100,18 +105,14 @@ export function taskListBannerItem(input: {
     children: (
       <ComposerBanner.Scroll>
         {steps.map((step) => (
-          <div key={step.id} className="flex items-center gap-2 text-sm leading-6">
-            <span className="flex-none">{TASK_STEP_ICONS[step.status]}</span>
-            <span
-              className={
-                step.status === "completed"
-                  ? "min-w-0 text-muted-foreground line-through"
-                  : "min-w-0"
-              }
-            >
+          <ComposerBanner.Row key={step.id} className="items-start">
+            <ComposerBanner.Icon className="h-5">
+              {TASK_STEP_STYLES[step.status].icon}
+            </ComposerBanner.Icon>
+            <ComposerBanner.Content className={`leading-5 ${TASK_STEP_STYLES[step.status].text}`}>
               {step.text}
-            </span>
-          </div>
+            </ComposerBanner.Content>
+          </ComposerBanner.Row>
         ))}
       </ComposerBanner.Scroll>
     ),
