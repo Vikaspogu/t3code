@@ -4,6 +4,7 @@ import {
   cliArchiveFileName,
   cliArchivePlatformKey,
   cliArchiveTarCommand,
+  cliReleaseAssetUrl,
   cliReleaseDownloadBaseUrl,
   cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
@@ -37,6 +38,12 @@ describe("cliRelease", () => {
     );
     expect(cliReleaseDownloadBaseUrl("1.2.3", "https://mirror.example/t3/")).toBe(
       "https://mirror.example/t3/orbit-v1.2.3",
+    );
+    expect(cliReleaseAssetUrl("1.2.3", "t3-1.2.3-linux-x64.tar.gz")).toBe(
+      "https://github.com/Vikaspogu/t3code/releases/download/orbit-v1.2.3/t3-1.2.3-linux-x64.tar.gz",
+    );
+    expect(cliReleaseAssetUrl("1.2.3", "SHA256SUMS", "https://mirror.example/t3/")).toBe(
+      "https://mirror.example/t3/orbit-v1.2.3/SHA256SUMS",
     );
   });
   it("parses sha256sum output including binary-mode markers", () => {
