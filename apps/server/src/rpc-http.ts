@@ -27,6 +27,8 @@ import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import { rpcInstrumentationLayer } from "./observability/RpcInstrumentation.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
+import * as AcpRegistrySessions from "./provider/AcpRegistrySessions.ts";
+import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
@@ -129,6 +131,7 @@ export const layer = Layer.unwrap(
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.
               Layer.provide(DefectReporter.layer),
+              Layer.provide(AcpRegistrySessions.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(
                 Layer.succeed(AgentSessionScanner.AgentSessionScanner, agentSessionScanner),
@@ -209,7 +212,7 @@ export const layer = Layer.unwrap(
   // startup instead of per POST.
   Layer.provide(
     Layer.mergeAll(
-      AgentSessionScanner.layer,
+      AgentSessionScanner.layer.pipe(Layer.provide(ProviderSessionRuntime.layer)),
       ProviderMaintenanceRunner.layer,
       OtlpEndpointCheck.layer,
       SourceControlDiscovery.layer.pipe(

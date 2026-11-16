@@ -4,6 +4,7 @@ import {
   cliArchiveFileName,
   cliArchivePlatformKey,
   cliArchiveTarCommand,
+  cliReleaseAssetUrl,
   cliReleaseDownloadBaseUrl,
   cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
@@ -11,11 +12,10 @@ import {
 } from "./cliRelease.ts";
 
 describe("cliRelease", () => {
-  it("names archives by version and platform, zip only on Windows", () => {
+  it("names Linux x64 archives by version", () => {
     expect(cliArchiveFileName("1.2.3-preview.20260911.4", "linux-x64")).toBe(
       "t3-1.2.3-preview.20260911.4-linux-x64.tar.gz",
     );
-    // The fork ships no Windows archive, so the zip branch is unreachable.
     expect(cliArchiveFileName("1.2.3", "linux-x64")).toBe("t3-1.2.3-linux-x64.tar.gz");
   });
 
@@ -37,6 +37,12 @@ describe("cliRelease", () => {
     );
     expect(cliReleaseDownloadBaseUrl("1.2.3", "https://mirror.example/t3/")).toBe(
       "https://mirror.example/t3/orbit-v1.2.3",
+    );
+    expect(cliReleaseAssetUrl("1.2.3", "t3-1.2.3-linux-x64.tar.gz")).toBe(
+      "https://github.com/Vikaspogu/t3code/releases/download/orbit-v1.2.3/t3-1.2.3-linux-x64.tar.gz",
+    );
+    expect(cliReleaseAssetUrl("1.2.3", "SHA256SUMS", "https://mirror.example/t3/")).toBe(
+      "https://mirror.example/t3/orbit-v1.2.3/SHA256SUMS",
     );
   });
   it("parses sha256sum output including binary-mode markers", () => {

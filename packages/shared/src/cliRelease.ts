@@ -9,14 +9,7 @@ export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITOR
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
 
-/**
- * The archives a release attaches. Kept in step with the jobs in
- * .github/workflows/release-orbit.yaml: a key here without a build there
- * produces download URLs that 404, and a build there without a key here is
- * unreachable from every installer. The fork currently ships linux-x64 only.
- */
-// No darwin-x64: Node single-executables are unsupported on x64 macOS (the
-// SEA docs list macOS as arm64 only) and the binary segfaults on start.
+// Keep archive keys aligned with the fork builds in .github/workflows/release-orbit.yaml.
 const CLI_ARCHIVE_PLATFORM_KEYS = ["linux-x64"] as const;
 export type CliArchivePlatformKey = (typeof CLI_ARCHIVE_PLATFORM_KEYS)[number];
 
@@ -64,7 +57,11 @@ export function cliReleaseAssetUrl(
   fileName: string,
   baseUrl: string | undefined = CLI_RELEASE_DEFAULT_BASE_URL,
 ): string {
-  return releaseAssetUrl(baseUrl?.trim() || CLI_RELEASE_DEFAULT_BASE_URL, `v${version}`, fileName);
+  return releaseAssetUrl(
+    baseUrl?.trim() || CLI_RELEASE_DEFAULT_BASE_URL,
+    `${CLI_RELEASE_TAG_PREFIX}${version}`,
+    fileName,
+  );
 }
 
 export function parseChecksums(text: string): ReadonlyMap<string, string> {
