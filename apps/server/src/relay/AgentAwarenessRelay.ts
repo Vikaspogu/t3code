@@ -77,7 +77,7 @@ function isTurnItemPayload(
   );
 }
 
-function shouldPublishAgentAwarenessEvent(
+export function shouldPublishAgentAwarenessEvent(
   event: Pick<OrchestrationV2DomainEvent, "type"> & { readonly payload?: unknown },
 ): boolean {
   if (
@@ -370,7 +370,7 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
 }
 
 // Checked at completion time, so a completion processed after the wake stays silent too.
-function snoozedCompletion(
+export function snoozedCompletion(
   thread: AgentAwarenessThread,
   state: { readonly phase: string } | null,
 ): boolean {
