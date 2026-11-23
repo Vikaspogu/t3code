@@ -114,6 +114,7 @@ import {
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import {
+  buildSidebarProjectPickerEntries,
   projectGroupsSpanEnvironments,
   resolveSidebarProjectScopeKeys,
   getSidebarProjectSettingsKey,
@@ -135,7 +136,7 @@ import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -216,6 +217,8 @@ import {
   useThreadJumpHintsVisible,
   type SidebarListItem,
   type SidebarSection,
+  resolvePinnedSidebarVisibleThreads,
+  routeThreadOnly,
 } from "./Sidebar.logic";
 import {
   createSidebarCollisionDetection,
@@ -419,15 +422,6 @@ function resolveDraggedOrders(input: {
   };
 }
 
-function routeThreadOnly(
-  threads: readonly EnvironmentThreadShell[],
-  routeThreadKey: string | null,
-): readonly EnvironmentThreadShell[] {
-  if (routeThreadKey === null) return EMPTY_THREADS;
-  const routeThread = threads.find((thread) => threadShellKey(thread) === routeThreadKey);
-  return routeThread === undefined ? EMPTY_THREADS : [routeThread];
-}
-
 // Separate hooks cache maps independently of later Sidebar hooks and preserve dnd-kit inputs.
 function useSidebarThreads(input: {
   readonly projectScopeKey: string | null;
@@ -465,6 +459,7 @@ function useSidebarThreads(input: {
     inboxReturns.subscribe,
     inboxReturns.getSnapshot,
   );
+  const pinnedStatusEnabled = useClientSettings((s) => s.sidebarPinnedStatusEnabled);
   const nowMinute = useNowMinute();
   // Minute-quantized clocks would delay second-precise snooze wakes by up to a minute.
   const snoozeWakeClock = useSnoozeWakeClock(threads);
@@ -492,6 +487,9 @@ function useSidebarThreads(input: {
     IDLE_SHELF_EXPANDED_KEY,
     true,
     Schema.Boolean,
+  );
+  const localLastVisitedAtById = useUiStateStore((state) =>
+    pinnedStatusEnabled && !pinnedShelfExpanded ? state.threadLastVisitedAtById : null,
   );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
@@ -555,9 +553,14 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
-  const visiblePinnedThreads = pinnedShelfExpanded
-    ? pinnedThreads
-    : routeThreadOnly(pinnedThreads, routeRowThreadKey);
+  const visiblePinnedThreads = resolvePinnedSidebarVisibleThreads({
+    threads: pinnedThreads,
+    expanded: pinnedShelfExpanded,
+    statusEnabled: pinnedStatusEnabled,
+    routeRowThreadKey,
+    threadKey: threadShellKey,
+    getLocalLastVisitedAt: (thread) => localLastVisitedAtById?.[threadShellKey(thread)],
+  });
   const visibleActiveThreads = idleShelfExpanded
     ? activeThreads
     : routeThreadOnly(activeThreads, routeRowThreadKey);
@@ -604,6 +607,7 @@ function useSidebarThreads(input: {
     ...partition,
     threads,
     workingShelfEnabled,
+    pinnedStatusEnabled,
     searchableThreads: [
       ...pinnedThreads,
       ...activeThreads,
@@ -1297,7 +1301,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const startThreadInProjectFolder = useStableCallback((group: SidebarProjectSnapshot) => {
     if (isMobile) setOpenMobile(false);
-    void handleNewThread(scopeProjectRef(group.environmentId, group.id));
+    const [entry] = buildSidebarProjectPickerEntries({
+      groups: [group],
+      preferredProjectRef: resolveThreadActionProjectRef({
+        ...newThreadContext,
+        activeThread: newThreadContext.activeThread ?? undefined,
+      }),
+    });
+    const target = entry?.targetProject ?? group;
+    void handleNewThread(scopeProjectRef(target.environmentId, target.id));
   });
   const handleProjectFolderContextMenu = useStableCallback(
     (
@@ -1348,6 +1360,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const {
     workingShelfEnabled,
+    pinnedStatusEnabled,
     pinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
@@ -2780,6 +2793,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning: !threadRuntimeCanArchive(thread.runtime),
+              hasCompletedRun: thread.latestRun?.completedAt != null,
               canShareWithGuest: appAtomRegistry.get(
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
@@ -3721,12 +3735,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   marker="pinned-header"
                                   label={gt("Pinned", { $context: "sidebar section" })}
                                   count={pinnedThreads.length}
+                                  pinnedStatusEnabled={pinnedStatusEnabled}
                                   hiddenThreads={
                                     pinnedShelfExpanded
                                       ? undefined
-                                      : pinnedThreads.filter(
-                                          (thread) => threadShellKey(thread) !== routeRowThreadKey,
-                                        )
+                                      : pinnedStatusEnabled
+                                        ? pinnedThreads
+                                        : pinnedThreads.filter(
+                                            (thread) =>
+                                              threadShellKey(thread) !== routeRowThreadKey,
+                                          )
                                   }
                                   dragging={from !== null}
                                   isDropTarget={dragTargetSection === "pinned"}

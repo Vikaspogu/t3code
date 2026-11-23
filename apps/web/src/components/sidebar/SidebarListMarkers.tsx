@@ -1,12 +1,17 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { msg, useMessages } from "gt-react";
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { type ReactNode, useLayoutEffect } from "react";
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "../../uiStateStore";
-import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
+import {
+  resolvePinnedSidebarSummary,
+  resolveSidebarFolderDot,
+  resolveThreadLastVisitedAt,
+} from "../Sidebar.logic";
 import {
   animateSidebarLayoutChanges,
   sidebarMarkerId,
@@ -129,26 +134,65 @@ export function SidebarSectionHeader(props: {
   dragging?: boolean;
   isDropTarget?: boolean;
   toggle: { expanded: boolean; onToggle: () => void };
-  /** Threads hidden by the collapse; their most urgent state shows as a dot on the header. */
+  /** Threads summarized by the collapsed header, including any visible preview or route row. */
   hiddenThreads?: readonly EnvironmentThreadShell[] | undefined;
+  pinnedStatusEnabled?: boolean;
 }) {
+  const m = useMessages();
   const localLastVisitedAtById = useUiStateStore((state) =>
     !props.toggle.expanded ? state.threadLastVisitedAtById : null,
   );
+  const collapsedThreads = props.toggle.expanded ? undefined : props.hiddenThreads;
+  const resolvedThreads = collapsedThreads?.map((thread) => ({
+    ...thread,
+    lastVisitedAt: resolveThreadLastVisitedAt(
+      thread.lastVisitedAt,
+      localLastVisitedAtById?.[scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))],
+    ),
+  }));
   const dot =
-    !props.toggle.expanded && props.hiddenThreads !== undefined && props.hiddenThreads.length > 0
-      ? resolveSidebarFolderDot(
-          props.hiddenThreads.map((thread) => ({
-            ...thread,
-            lastVisitedAt: resolveThreadLastVisitedAt(
-              thread.lastVisitedAt,
-              localLastVisitedAtById?.[
-                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
-              ],
-            ),
-          })),
-        )
+    (props.marker !== "pinned-header" || props.pinnedStatusEnabled !== true) &&
+    resolvedThreads !== undefined &&
+    resolvedThreads.length > 0
+      ? resolveSidebarFolderDot(resolvedThreads)
       : null;
+  const summary =
+    props.marker === "pinned-header" &&
+    props.pinnedStatusEnabled === true &&
+    resolvedThreads !== undefined
+      ? resolvePinnedSidebarSummary(resolvedThreads)
+      : null;
+  const summaryItems =
+    summary === null
+      ? []
+      : (
+          [
+            {
+              count: summary.attention,
+              label: msg("{count, plural, one {{count} needs you} other {{count} need you}}"),
+              dot: "attention",
+              color: "text-warning-foreground",
+            },
+            {
+              count: summary.failed,
+              label: msg("{count, plural, one {{count} failed} other {{count} failed}}"),
+              dot: "failed",
+              color: "text-error-foreground",
+            },
+            {
+              count: summary.done,
+              label: msg("{count, plural, one {{count} new} other {{count} new}}"),
+              dot: "unread",
+              color: "text-success-foreground",
+            },
+            {
+              count: summary.working,
+              label: msg("{count, plural, one {{count} working} other {{count} working}}"),
+              dot: "working",
+              color: "text-info-foreground",
+            },
+          ] as const
+        ).filter((item) => item.count > 0);
   const shelf =
     props.marker === "pinned-header"
       ? "pinned"
@@ -163,7 +207,11 @@ export function SidebarSectionHeader(props: {
     <SortableSidebarMarker
       marker={props.marker}
       data-testid={`sidebar-${props.marker}`}
-      className={cn("relative mx-0.5 h-8", props.className)}
+      className={cn(
+        "relative mx-0.5",
+        summaryItems.length > 0 ? "min-h-8" : "h-8",
+        props.className,
+      )}
     >
       <CollapsibleSectionHeader
         data-sidebar-row={`shelf:${shelf}`}
@@ -184,6 +232,19 @@ export function SidebarSectionHeader(props: {
       >
         {props.label}
       </CollapsibleSectionHeader>
+      {summaryItems.length > 0 ? (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 px-3 pb-2 text-2xs leading-4">
+          {summaryItems.map((item) => (
+            <span key={item.dot} className={cn("inline-flex items-center gap-1.5", item.color)}>
+              <span
+                aria-hidden
+                className={cn("size-1.5 rounded-full", FOLDER_DOT_CLASS_NAME[item.dot])}
+              />
+              <span className="tabular-nums">{m(item.label, { count: item.count })}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
     </SortableSidebarMarker>
   );
 }

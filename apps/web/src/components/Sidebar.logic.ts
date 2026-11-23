@@ -1,6 +1,9 @@
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import {
+  resolveThreadWorkingStartedAt,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/models";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -1055,6 +1058,89 @@ export function resolveSidebarFolderDot(
   if (hasUnread) return "unread";
   if (statuses.has("working") || statuses.has("preparing")) return "working";
   return null;
+}
+
+const EMPTY_THREADS: readonly never[] = [];
+
+export function routeThreadOnly<T extends Pick<EnvironmentThreadShell, "environmentId" | "id">>(
+  threads: readonly T[],
+  routeThreadKey: string | null,
+): readonly T[] {
+  if (routeThreadKey === null) return EMPTY_THREADS;
+  const routeThread = threads.find(
+    (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+  );
+  return routeThread === undefined ? EMPTY_THREADS : [routeThread];
+}
+export function resolvePinnedSidebarSummary(
+  threads: ReadonlyArray<ThreadStatusInput & SidebarThreadStatusInput>,
+) {
+  const summary = { attention: 0, failed: 0, done: 0, working: 0 };
+  for (const thread of threads) {
+    const status = resolveSidebarRowStatus(thread);
+    if (
+      status === "input" ||
+      status === "approval" ||
+      status === "request" ||
+      status === "limited"
+    ) {
+      summary.attention += 1;
+    } else if (status === "failed") {
+      summary.failed += 1;
+    } else if (status === "ready" && hasUnseenCompletion(thread)) {
+      summary.done += 1;
+    } else if (status === "working" || status === "preparing") {
+      summary.working += 1;
+    }
+  }
+  return summary;
+}
+
+export function selectPinnedSidebarPreview<T extends ThreadStatusInput & SidebarThreadStatusInput>(
+  threads: readonly T[],
+  getLocalLastVisitedAt?: (thread: T) => string | undefined,
+): T | null {
+  const status = (thread: T) =>
+    resolveSidebarRowStatus({
+      ...thread,
+      lastVisitedAt: resolveThreadLastVisitedAt(
+        thread.lastVisitedAt,
+        getLocalLastVisitedAt?.(thread),
+      ),
+    });
+  return (
+    threads.find((thread) => {
+      const value = status(thread);
+      return (
+        value === "input" || value === "approval" || value === "request" || value === "limited"
+      );
+    }) ??
+    threads.find((thread) => status(thread) === "failed") ??
+    null
+  );
+}
+
+export function resolvePinnedSidebarVisibleThreads<
+  T extends ThreadStatusInput & SidebarThreadStatusInput,
+>(input: {
+  readonly threads: readonly T[];
+  readonly expanded: boolean;
+  readonly statusEnabled: boolean;
+  readonly routeRowThreadKey: string | null;
+  readonly threadKey: (thread: T) => string;
+  readonly getLocalLastVisitedAt?: (thread: T) => string | undefined;
+}): readonly T[] {
+  if (input.expanded) return input.threads;
+  const routeThread =
+    input.routeRowThreadKey === null
+      ? undefined
+      : input.threads.find((thread) => input.threadKey(thread) === input.routeRowThreadKey);
+  const routeThreads = routeThread === undefined ? [] : [routeThread];
+  if (!input.statusEnabled) return routeThreads;
+  const preview = selectPinnedSidebarPreview(input.threads, input.getLocalLastVisitedAt);
+  return preview === null
+    ? routeThreads
+    : [preview, ...routeThreads.filter((thread) => thread !== preview)];
 }
 
 /**
