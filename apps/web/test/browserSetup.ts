@@ -3,6 +3,10 @@ import { commands } from "vite-plus/test/browser";
 
 import { initializeI18n } from "../src/i18n/initializeI18n";
 
+// Vitest reuses browser contexts across files; reset storage before app stores hydrate.
+localStorage.clear();
+sessionStorage.clear();
+
 declare module "vite-plus/test/browser" {
   interface BrowserCommands {
     /** Defined in vite.config.ts. Moves Playwright's mouse off the page. */
