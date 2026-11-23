@@ -333,9 +333,10 @@ export const make = Effect.gen(function* () {
           tags: ["t3code", decision.kind],
           click: `t3code://${state.deepLink.slice(1)}`,
         }),
-        Effect.flatMap(client.execute),
+        Effect.flatMap(HttpClient.withScope(client).execute),
         Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
         Effect.map((response) => response.status),
+        Effect.scoped,
         Effect.timeout("10 seconds"),
         Effect.catch((error) =>
           Effect.logWarning("ntfy publish failed", { errorTag: error._tag }).pipe(Effect.as(0)),

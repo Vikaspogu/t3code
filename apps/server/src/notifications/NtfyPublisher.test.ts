@@ -170,6 +170,8 @@ const setup = Effect.fnUntraced(function* (
     getThreadHistoryPage: unused,
     getTimelinePage: unused,
     getMessageCount: unused,
+    getRunCount: unused,
+    submitRunOutput: unused,
     getMessagesById: unused,
     getTurnItem: unused,
     getThreadRecords: unused,
@@ -208,11 +210,13 @@ const setup = Effect.fnUntraced(function* (
     authorization: string | null;
     body: typeof payloadSchema.Type;
   }> = [];
+  const requestSignals: AbortSignal[] = [];
   const fetch: typeof globalThis.fetch = Object.assign(
     (
       input: Parameters<typeof globalThis.fetch>[0],
       init?: Parameters<typeof globalThis.fetch>[1],
     ) => {
+      if (init?.signal) requestSignals.push(init.signal);
       const body = init?.body;
       if (typeof body !== "string" && !(body instanceof Uint8Array))
         return Promise.reject(new Error("Expected serialized payload"));
@@ -273,7 +277,18 @@ const setup = Effect.fnUntraced(function* (
       occurredAt: DateTime.makeUnsafe(0),
       payload: appThread(shells.get(id) ?? shell({ id })),
     });
-  return { publisher, publications, shells, sent, snapshots, events, pulls, deliver, rename };
+  return {
+    publisher,
+    publications,
+    requestSignals,
+    shells,
+    sent,
+    snapshots,
+    events,
+    pulls,
+    deliver,
+    rename,
+  };
 });
 
 describe("NtfyPublisher configuration", () => {
@@ -328,6 +343,8 @@ describe("NtfyPublisher", () => {
         yield* h.rename();
         yield* h.rename();
         assert.lengthOf(h.publications, 1);
+        assert.lengthOf(h.requestSignals, 1);
+        assert.isTrue(h.requestSignals[0]!.aborted);
         assert.deepEqual(h.publications[0], {
           url: "https://ntfy.example.test/",
           redirect: "manual",

@@ -1,3 +1,8 @@
+import * as IssueService from "./issue/IssueService.ts";
+import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
+import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
+import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
+import * as PeerThreadRelay from "./peer/PeerThreadRelay.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -60,6 +65,11 @@ export const layer = Layer.unwrap(
     const npmRelease = yield* NpmRelease.NpmRelease;
     const peerLinks = yield* PeerLinks.PeerLinks;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
+    const issues = yield* IssueService.IssueService;
+    const threadIssues = yield* ThreadIssueService.ThreadIssueService;
+    const issueTrackers = yield* IssueTrackerConnections.IssueTrackerConnections;
+    const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
+    const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
@@ -145,6 +155,13 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               Layer.provide(Layer.succeed(NpmRelease.NpmRelease, npmRelease)),
               Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
+              Layer.provide(Layer.succeed(IssueService.IssueService, issues)),
+              Layer.provide(Layer.succeed(ThreadIssueService.ThreadIssueService, threadIssues)),
+              Layer.provide(
+                Layer.succeed(IssueTrackerConnections.IssueTrackerConnections, issueTrackers),
+              ),
+              Layer.provide(Layer.succeed(PeerThreadRelay.PeerThreadRelay, peerThreadRelay)),
+              Layer.provide(Layer.succeed(PeerClientPairing.PeerClientPairing, peerClientPairing)),
               Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
