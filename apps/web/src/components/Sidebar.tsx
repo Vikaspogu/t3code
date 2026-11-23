@@ -216,6 +216,7 @@ import {
   useThreadJumpHintsVisible,
   type SidebarListItem,
   type SidebarSection,
+  resolvePinnedSidebarVisibleThreads,
 } from "./Sidebar.logic";
 import {
   createSidebarCollisionDetection,
@@ -464,6 +465,7 @@ function useSidebarThreads(input: {
     inboxReturns.subscribe,
     inboxReturns.getSnapshot,
   );
+  const pinnedStatusEnabled = useClientSettings((s) => s.sidebarPinnedStatusEnabled);
   const nowMinute = useNowMinute();
   // Minute-quantized clocks would delay second-precise snooze wakes by up to a minute.
   const snoozeWakeClock = useSnoozeWakeClock(threads);
@@ -486,6 +488,9 @@ function useSidebarThreads(input: {
     PINNED_SHELF_EXPANDED_KEY,
     true,
     Schema.Boolean,
+  );
+  const localLastVisitedAtById = useUiStateStore((state) =>
+    pinnedStatusEnabled && !pinnedShelfExpanded ? state.threadLastVisitedAtById : null,
   );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
@@ -549,9 +554,14 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
-  const visiblePinnedThreads = pinnedShelfExpanded
-    ? pinnedThreads
-    : routeThreadOnly(pinnedThreads, routeRowThreadKey);
+  const visiblePinnedThreads = resolvePinnedSidebarVisibleThreads({
+    threads: pinnedThreads,
+    expanded: pinnedShelfExpanded,
+    statusEnabled: pinnedStatusEnabled,
+    routeRowThreadKey,
+    threadKey: threadShellKey,
+    getLocalLastVisitedAt: (thread) => localLastVisitedAtById?.[threadShellKey(thread)],
+  });
   const projectFolders =
     folderGroups === null
       ? null
@@ -595,6 +605,7 @@ function useSidebarThreads(input: {
     ...partition,
     threads,
     workingShelfEnabled,
+    pinnedStatusEnabled,
     searchableThreads: [
       ...pinnedThreads,
       ...activeThreads,
@@ -1334,6 +1345,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const {
     workingShelfEnabled,
+    pinnedStatusEnabled,
     pinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
@@ -3694,12 +3706,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   marker="pinned-header"
                                   label={gt("Pinned", { $context: "sidebar section" })}
                                   count={pinnedThreads.length}
+                                  pinnedStatusEnabled={pinnedStatusEnabled}
                                   hiddenThreads={
                                     pinnedShelfExpanded
                                       ? undefined
-                                      : pinnedThreads.filter(
-                                          (thread) => threadShellKey(thread) !== routeRowThreadKey,
-                                        )
+                                      : pinnedStatusEnabled
+                                        ? pinnedThreads
+                                        : pinnedThreads.filter(
+                                            (thread) =>
+                                              threadShellKey(thread) !== routeRowThreadKey,
+                                          )
                                   }
                                   dragging={from !== null}
                                   isDropTarget={dragTargetSection === "pinned"}
