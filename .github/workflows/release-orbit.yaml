@@ -322,6 +322,7 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.release.outputs.version }}
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       # Manual checkout: see the cli job for why actions/checkout cannot be used.
       - name: Checkout
