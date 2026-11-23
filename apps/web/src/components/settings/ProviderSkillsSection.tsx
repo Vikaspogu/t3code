@@ -1,5 +1,7 @@
 "use client";
 
+import { T, msg, useGT, useMessages } from "gt-react";
+
 import { useState } from "react";
 import {
   providerSupportsSkillToggle,
@@ -28,12 +30,12 @@ interface ProviderSkillsSectionProps {
 }
 
 const SOURCE_LABELS: Record<string, string> = {
-  app: "App",
-  repo: "Repo",
-  project: "Project",
-  personal: "Personal",
-  system: "System",
-  other: "Other",
+  app: msg("App", { $context: "skill source" }),
+  repo: msg("Repo", { $context: "skill source" }),
+  project: msg("Project", { $context: "skill source" }),
+  personal: msg("Personal", { $context: "skill source" }),
+  system: msg("System", { $context: "skill source" }),
+  other: msg("Other", { $context: "skill source" }),
 };
 
 function snapshotSortKey(snapshot: ServerProviderWorkspaceSnapshot): number {
@@ -52,8 +54,12 @@ function SkillRow({
   readonly pending: boolean;
   readonly onToggle: (enabled: boolean) => void;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   const sourceKind = resolveProviderSkillSourceKind(skill);
-  const sourceLabel = SOURCE_LABELS[sourceKind] ?? "Other";
+  const sourceLabel = messages(
+    SOURCE_LABELS[sourceKind] ?? msg("Other", { $context: "skill source" }),
+  );
   const title = skill.displayName ?? skill.name;
   return (
     <div className="flex items-start justify-between gap-3 py-2">
@@ -65,21 +71,23 @@ function SkillRow({
           <TooltipPopup>{skill.path}</TooltipPopup>
         </Tooltip>
         <p className="line-clamp-2 text-xs text-muted-foreground">
-          {skill.shortDescription ?? skill.description ?? "No description"}
+          {skill.shortDescription ?? skill.description ?? gt("No description")}
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Badge variant="outline">{sourceLabel}</Badge>
         {skill.userInvocationOnly === true ? (
           <Tooltip>
-            <TooltipTrigger render={<Badge variant="outline" />}>User-only</TooltipTrigger>
+            <TooltipTrigger render={<Badge variant="outline" />}>
+              <T>User-only</T>
+            </TooltipTrigger>
             <TooltipPopup>
-              The provider hides this skill from the agent itself; only you can start it.
+              <T>The provider hides this skill from the agent itself; only you can start it.</T>
             </TooltipPopup>
           </Tooltip>
         ) : null}
         <Switch
-          aria-label={`Enable ${skill.name}`}
+          aria-label={gt("Enable {name}", { name: skill.name })}
           checked={skill.enabled}
           disabled={!canToggle || pending}
           onCheckedChange={onToggle}
@@ -102,6 +110,7 @@ export function ProviderSkillsSection({
   provider,
   readOnly = false,
 }: ProviderSkillsSectionProps) {
+  const gt = useGT();
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const [pendingSkills, setPendingSkills] = useState<ReadonlySet<string>>(() => new Set());
 
@@ -161,19 +170,22 @@ export function ProviderSkillsSection({
           aria-expanded={instructionsExpanded}
           onClick={() => setInstructionsExpanded((expanded) => !expanded)}
         >
-          <span className="text-sm font-medium">T3 Code instructions</span>
+          <span className="text-sm font-medium">
+            <T>T3 Code instructions</T>
+          </span>
           <span className="text-xs text-muted-foreground">
-            {instructionsExpanded ? "Hide" : "Show"}
+            {instructionsExpanded ? gt("Hide") : gt("Show")}
           </span>
         </button>
         <p className="mt-1 text-xs text-muted-foreground">
           {instructions.length === 0
             ? driverKind === null
-              ? "Unknown provider driver."
-              : "T3 Code does not add instructions to this provider's turns."
-            : `${instructions.length} instruction ${
-                instructions.length === 1 ? "block" : "blocks"
-              } T3 adds on top of the provider's own system prompt.`}
+              ? gt("Unknown provider driver.")
+              : gt("T3 Code does not add instructions to this provider's turns.")
+            : gt(
+                "{count, plural, one {{count} instruction block T3 adds on top of the provider's own system prompt.} other {{count} instruction blocks T3 adds on top of the provider's own system prompt.}}",
+                { count: instructions.length },
+              )}
         </p>
         {instructionsExpanded ? (
           <div className="mt-2 space-y-3">
@@ -194,11 +206,15 @@ export function ProviderSkillsSection({
       </div>
 
       <div>
-        <p className="text-sm font-medium">Skills &amp; commands</p>
+        <p className="text-sm font-medium">
+          <T>Skills &amp; commands</T>
+        </p>
         {activeSnapshot === undefined ? (
           <p className="mt-1 text-xs text-muted-foreground">
-            Skills are discovered per workspace when a thread runs in a project. Open a project
-            thread, then revisit this panel to see and toggle what the provider loads.
+            <T>
+              Skills are discovered per workspace when a thread runs in a project. Open a project
+              thread, then revisit this panel to see and toggle what the provider loads.
+            </T>
           </p>
         ) : (
           <>
@@ -222,11 +238,20 @@ export function ProviderSkillsSection({
             ) : null}
             <div className="mt-1">
               <p className="mb-2 text-xs text-muted-foreground">
-                {activeSnapshot.skills.length} skills · {activeSnapshot.slashCommands.length} slash
-                commands {disabledSkills > 0 ? `· ${disabledSkills} disabled` : ""}
+                {gt(
+                  "{skills} skills · {commands} slash commands {hasDisabled, select, yes {· {disabled} disabled} other {}}",
+                  {
+                    skills: activeSnapshot.skills.length,
+                    commands: activeSnapshot.slashCommands.length,
+                    hasDisabled: disabledSkills > 0 ? "yes" : "no",
+                    disabled: disabledSkills,
+                  },
+                )}
               </p>
               {activeSnapshot.skills.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No skills found in this workspace.</p>
+                <p className="text-xs text-muted-foreground">
+                  <T>No skills found in this workspace.</T>
+                </p>
               ) : (
                 <div className="divide-y divide-border">
                   {activeSnapshot.skills.map((skill) => (

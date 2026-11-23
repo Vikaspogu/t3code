@@ -1,3 +1,4 @@
+import { T, useGT, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   squashAtomCommandFailure,
@@ -46,6 +47,8 @@ export function VoiceProvider({
   children: ReactNode;
   showFallback?: boolean;
 }) {
+  const messages = useMessages();
+  const gt = useGT();
   const start = useAtomCommand(voiceCommands.start, { reportFailure: false });
   const submit = useAtomCommand(voiceCommands.submit, { reportFailure: false });
   const end = useAtomCommand(voiceCommands.end, { reportFailure: false });
@@ -131,14 +134,14 @@ export function VoiceProvider({
       {children}
       {showFallback && active ? (
         <section
-          aria-label="Active voice call"
+          aria-label={gt("Active voice call")}
           className="fixed inset-x-4 bottom-4 z-40 mx-auto flex max-w-md flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-popover p-3"
         >
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
             <AudioLinesIcon aria-hidden="true" className="size-5 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
               <p role="status" className="text-sm font-medium">
-                {voiceCallStatus(view)}
+                {voiceCallStatus(view, messages)}
               </p>
               {view.target ? (
                 <Link
@@ -146,7 +149,7 @@ export function VoiceProvider({
                   params={buildThreadRouteParams(view.target)}
                   className="block truncate text-xs text-muted-foreground underline underline-offset-2"
                 >
-                  {view.snapshot?.threadTitle || "Return to the call’s thread"}
+                  {view.snapshot?.threadTitle || gt("Return to the call’s thread")}
                 </Link>
               ) : null}
             </div>
@@ -159,11 +162,11 @@ export function VoiceProvider({
               onClick={controller.toggleMute}
             >
               {view.muted ? <MicOffIcon /> : <MicIcon />}
-              {view.muted ? "Unmute" : "Mute"}
+              {view.muted ? gt("Unmute") : gt("Mute")}
             </Button>
             <Button variant="destructive" size="sm" onClick={controller.end}>
               <PhoneOffIcon />
-              End call
+              <T>End call</T>
             </Button>
           </div>
         </section>

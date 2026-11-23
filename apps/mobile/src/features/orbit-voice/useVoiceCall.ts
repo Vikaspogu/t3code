@@ -1,3 +1,5 @@
+import { msg } from "gt-react-native";
+import { m } from "../../i18n/messages";
 import type { ProviderInstanceId, ScopedThreadRef } from "@t3tools/contracts";
 import {
   squashAtomCommandFailure,
@@ -15,7 +17,9 @@ import { useVoiceAvailability } from "./availability";
 import { voiceCommands } from "./commands";
 
 export function toErrorMessage(error: unknown) {
-  return error instanceof Error && error.message !== "" ? error.message : "Something went wrong";
+  return error instanceof Error && error.message !== ""
+    ? error.message
+    : m(msg("Something went wrong"));
 }
 
 function valueOrThrow<A, E>(result: AtomCommandResult<A, E>): A {

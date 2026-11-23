@@ -1,3 +1,4 @@
+import { T, Var, useGT, useMessages } from "gt-react-native";
 import type { ProviderInstanceId, ScopedThreadRef } from "@t3tools/contracts";
 import { voiceCallStatus } from "@t3tools/client-runtime/voice";
 import { DateTime } from "effect";
@@ -21,6 +22,8 @@ export function VoiceCallBar({
   readonly providerInstanceId: ProviderInstanceId | undefined;
   readonly onOpenSheet: () => void;
 }) {
+  const messages = useMessages();
+  const gt = useGT();
   const { controller, view } = useVoiceCall(target, providerInstanceId);
   if (view.state !== "starting" && view.state !== "connected") return null;
 
@@ -33,7 +36,7 @@ export function VoiceCallBar({
     <Pressable
       onPress={onOpenSheet}
       accessibilityRole="button"
-      accessibilityLabel="Open voice call"
+      accessibilityLabel={gt("Open voice call")}
       className="mx-3 mb-2 flex-row items-center gap-2 rounded-2xl bg-subtle-strong px-3 py-2"
     >
       <View
@@ -43,31 +46,37 @@ export function VoiceCallBar({
         )}
       />
       {waiting ? (
-        <Text className="shrink-0 text-xs font-medium text-warning">Approval waiting</Text>
+        <Text className="shrink-0 text-xs font-medium text-warning">
+          <T>Approval waiting</T>
+        </Text>
       ) : working ? (
         <Text className="shrink-0 text-xs text-foreground-secondary">
-          Working{" "}
-          <WorkingTimer
-            createdAt={DateTime.formatIso(working.startedAt)}
-            className="text-xs text-foreground-secondary"
-          />
+          <T>
+            Working{" "}
+            <Var>
+              <WorkingTimer
+                createdAt={DateTime.formatIso(working.startedAt)}
+                className="text-xs text-foreground-secondary"
+              />
+            </Var>
+          </T>
         </Text>
       ) : (
         <Text numberOfLines={1} className="shrink-1 text-xs text-foreground-secondary">
-          {latestCaption?.text ?? voiceCallStatus(view)}
+          {latestCaption?.text ?? voiceCallStatus(view, messages)}
         </Text>
       )}
       <View className="flex-1" />
       <ComposerToolbarButton
         icon={view.muted ? "mic.slash.fill" : "mic.fill"}
-        accessibilityLabel={view.muted ? "Unmute microphone" : "Mute microphone"}
+        accessibilityLabel={view.muted ? gt("Unmute microphone") : gt("Mute microphone")}
         active={view.muted}
         showChevron={false}
         onPress={controller.toggleMute}
       />
       <ComposerToolbarButton
         icon="phone.down.fill"
-        accessibilityLabel="End call"
+        accessibilityLabel={gt("End call")}
         variant="danger"
         showChevron={false}
         onPress={() => void controller.end()}

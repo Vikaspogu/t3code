@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react-native";
 import { useAtomValue } from "@effect/atom-react";
 import type { ProviderInstanceId, ScopedThreadRef } from "@t3tools/contracts";
 import { serverEnvironment } from "../../state/server";
@@ -14,8 +15,10 @@ export function useVoiceAvailability(
   target: ScopedThreadRef,
   providerInstanceId: ProviderInstanceId | undefined,
 ): string | null {
+  const gt = useGT();
+  const messages = useMessages();
   const providers = useAtomValue(serverEnvironment.providersValueAtom(target.environmentId));
   const permitted = useAtomValue(voiceCommands.start.permissionAtom(target.environmentId));
-  if (!isMobileVoiceSupported()) return "Voice needs an app build with the WebRTC module.";
-  return voiceUnavailableReason({ providers, providerInstanceId, permitted });
+  if (!isMobileVoiceSupported()) return gt("Voice needs an app build with the WebRTC module.");
+  return voiceUnavailableReason({ providers, providerInstanceId, permitted }, messages);
 }

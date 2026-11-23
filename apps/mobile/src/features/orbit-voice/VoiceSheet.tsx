@@ -1,3 +1,4 @@
+import { T, Var, useGT, useMessages } from "gt-react-native";
 import type { ProviderInstanceId, ScopedThreadRef } from "@t3tools/contracts";
 import {
   selectVoiceTask,
@@ -25,6 +26,8 @@ export function VoiceSheet({
   readonly target: ScopedThreadRef;
   readonly providerInstanceId: ProviderInstanceId | undefined;
 }) {
+  const messages = useMessages();
+  const gt = useGT();
   const { controller, view, unavailable } = useVoiceCall(target, providerInstanceId);
   const active = view.state === "starting" || view.state === "connected";
   const snapshot = view.snapshot;
@@ -36,8 +39,11 @@ export function VoiceSheet({
   ).length;
   const completedSeconds = task ? voiceTaskCompletedSeconds(task) : null;
   const notice = view.message ?? (active ? snapshot?.message : null);
-  const status = view.state === "idle" && unavailable ? "Voice unavailable" : voiceCallStatus(view);
-  const title = snapshot?.threadTitle || "This thread";
+  const status =
+    view.state === "idle" && unavailable
+      ? gt("Voice unavailable")
+      : voiceCallStatus(view, messages);
+  const title = snapshot?.threadTitle || gt("This thread");
 
   return (
     <View className="flex-1 bg-screen">
@@ -86,7 +92,7 @@ export function VoiceSheet({
               size={14}
             />
             <Text className="flex-1 text-xs text-warning-foreground">
-              Paused. Approval waiting in the thread. Close this sheet to review it.
+              <T>Paused. Approval waiting in the thread. Close this sheet to review it.</T>
             </Text>
           </View>
         ) : null}
@@ -113,25 +119,31 @@ export function VoiceSheet({
               </Text>
               {pendingCount > 1 ? (
                 <Text className="shrink-0 text-xs text-foreground-tertiary">
-                  +{pendingCount - 1} queued
+                  {gt("+{count} queued", { count: pendingCount - 1 })}
                 </Text>
               ) : null}
             </View>
             <Text className="text-xs text-foreground-tertiary">
-              {voiceTaskStatusLabel(task.state)}
+              {voiceTaskStatusLabel(task.state, messages)}
             </Text>
             {task.state === "working" || task.state === "waiting" ? (
               <Text className="text-xs text-foreground-secondary">
-                Working for{" "}
-                <WorkingTimer
-                  createdAt={DateTime.formatIso(task.startedAt)}
-                  className="text-xs text-foreground-secondary"
-                />
+                <T>
+                  Working for{" "}
+                  <Var>
+                    <WorkingTimer
+                      createdAt={DateTime.formatIso(task.startedAt)}
+                      className="text-xs text-foreground-secondary"
+                    />
+                  </Var>
+                </T>
               </Text>
             ) : null}
             {completedSeconds !== null ? (
               <Text className="text-xs text-foreground-secondary">
-                Completed for {formatCallClock(completedSeconds)}
+                <T>
+                  Completed for <Var>{formatCallClock(completedSeconds)}</Var>
+                </T>
               </Text>
             ) : null}
             {task.state === "completed" && task.result ? (
@@ -165,11 +177,13 @@ export function VoiceSheet({
 
         {captions.length > 0 ? (
           <View className="gap-2">
-            <Text className="text-sm text-foreground-tertiary">Transcript</Text>
+            <Text className="text-sm text-foreground-tertiary">
+              <T>Transcript</T>
+            </Text>
             {captions.map((caption) => (
               <View key={caption.sequence} className="gap-0.5">
                 <Text className="text-xs text-foreground-tertiary">
-                  {caption.role === "user" ? "You" : "Codex"}
+                  {caption.role === "user" ? gt("You") : "Codex"}
                 </Text>
                 <Text
                   className={
@@ -191,7 +205,7 @@ export function VoiceSheet({
           <>
             <ComposerToolbarButton
               icon={view.muted ? "mic.slash.fill" : "mic.fill"}
-              label={view.muted ? "Unmute" : "Mute"}
+              label={view.muted ? gt("Unmute") : gt("Mute")}
               active={view.muted}
               showChevron={false}
               minWidth={120}
@@ -199,7 +213,7 @@ export function VoiceSheet({
             />
             <ComposerToolbarButton
               icon="phone.down.fill"
-              label="End"
+              label={gt("End")}
               variant="danger"
               showChevron={false}
               minWidth={120}
@@ -211,10 +225,10 @@ export function VoiceSheet({
             icon="mic.fill"
             label={
               view.state === "starting"
-                ? "Connecting…"
+                ? gt("Connecting…")
                 : view.state === "ended" || view.state === "error"
-                  ? "Start again"
-                  : "Start voice call"
+                  ? gt("Start again")
+                  : gt("Start voice call")
             }
             variant="primary"
             showChevron={false}

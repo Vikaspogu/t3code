@@ -1,3 +1,5 @@
+import { msg, mFallback } from "gt-i18n";
+import type { MFunctionType } from "gt-i18n/types";
 // @effect-diagnostics globalTimers:off globalDate:off - WebRTC call controller, runs outside an Effect runtime.
 import type {
   OrbitVoiceSnapshot,
@@ -137,22 +139,24 @@ export interface VoiceCallView {
   connectedAt: string | null;
 }
 
-export function voiceCallStatus(view: VoiceCallView) {
+export function voiceCallStatus(view: VoiceCallView, resolve: MFunctionType = mFallback) {
   switch (view.state) {
     case "starting":
-      return view.microphone ? "Connecting…" : "Allow microphone access";
+      return view.microphone
+        ? resolve(msg("Connecting…"))
+        : resolve(msg("Allow microphone access"));
     case "connected":
       return view.muted
-        ? "Microphone muted"
+        ? resolve(msg("Microphone muted"))
         : view.activity === "thinking"
-          ? "Codex is thinking…"
-          : "Listening…";
+          ? resolve(msg("Codex is thinking…"))
+          : resolve(msg("Listening…"));
     case "error":
-      return "Call interrupted";
+      return resolve(msg("Call interrupted"));
     case "ended":
-      return "Call ended";
+      return resolve(msg("Call ended"));
     case "idle":
-      return "Voice with Codex";
+      return resolve(msg("Voice with Codex"));
   }
 }
 
@@ -170,20 +174,23 @@ export function selectVoiceTask(tasks: readonly OrbitVoiceTask[]): OrbitVoiceTas
   );
 }
 
-export function voiceTaskStatusLabel(state: OrbitVoiceTask["state"]): string {
+export function voiceTaskStatusLabel(
+  state: OrbitVoiceTask["state"],
+  resolve: MFunctionType = mFallback,
+): string {
   switch (state) {
     case "queued":
-      return "Queued";
+      return resolve(msg("Queued"));
     case "working":
-      return "Working in this thread";
+      return resolve(msg("Working in this thread"));
     case "waiting":
-      return "Needs attention in the thread";
+      return resolve(msg("Needs attention in the thread"));
     case "completed":
-      return "Task completed";
+      return resolve(msg("Task completed"));
     case "failed":
-      return "Task failed";
+      return resolve(msg("Task failed"));
     case "cancelled":
-      return "Task cancelled";
+      return resolve(msg("Task cancelled"));
   }
 }
 

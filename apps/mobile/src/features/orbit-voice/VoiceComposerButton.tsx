@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { ProviderInstanceId, ScopedThreadRef } from "@t3tools/contracts";
 import { voiceCallStatus } from "@t3tools/client-runtime/voice";
@@ -13,13 +14,15 @@ export function VoiceComposerButton({
   readonly target: ScopedThreadRef;
   readonly providerInstanceId: ProviderInstanceId | null | undefined;
 }) {
+  const messages = useMessages();
+  const gt = useGT();
   const navigation = useNavigation();
   const voice = useVoiceCall(target, providerInstanceId ?? undefined);
   if (voice.unavailable !== null) return null;
   const active = voice.view.state === "starting" || voice.view.state === "connected";
   return (
     <Pressable
-      accessibilityLabel={active ? voiceCallStatus(voice.view) : "Start voice call"}
+      accessibilityLabel={active ? voiceCallStatus(voice.view, messages) : gt("Start voice call")}
       accessibilityRole="button"
       hitSlop={8}
       onPress={() =>

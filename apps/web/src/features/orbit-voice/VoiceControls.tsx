@@ -1,3 +1,4 @@
+import { T, Var, useGT, useMessages } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { DateTime } from "effect";
 import type { OrbitVoiceSnapshot, ScopedThreadRef } from "@t3tools/contracts";
@@ -37,24 +38,25 @@ import {
 } from "./VoiceProvider";
 
 function useVoiceAvailability(target: ScopedThreadRef) {
+  const gt = useGT();
   const thread = useThreadShell(target);
   const config = useAtomValue(serverEnvironment.configValueAtom(target.environmentId));
   const permitted = useAtomValue(voiceCommands.start.permissionAtom(target.environmentId));
   const provider = config?.providers.find(
     (entry) => entry.instanceId === thread?.providerInstanceId,
   );
-  if (!thread) return "Send a message in this thread before starting voice.";
-  if (!config) return "Checking voice availability…";
+  if (!thread) return gt("Send a message in this thread before starting voice.");
+  if (!config) return gt("Checking voice availability…");
   if (!provider || (provider.driver !== "codex" && provider.driver !== "pi"))
-    return "Voice is available in Codex and Pi threads.";
-  if (!provider.enabled) return "Enable this provider in Settings to use voice.";
+    return gt("Voice is available in Codex and Pi threads.");
+  if (!provider.enabled) return gt("Enable this provider in Settings to use voice.");
   // pi threads borrow a Codex runtime for the speech bridge (audio/STT/TTS).
   if (
     provider.driver === "pi" &&
     !config.providers.some((entry) => entry.driver === "codex" && entry.enabled)
   )
-    return "Voice needs an enabled Codex provider for speech.";
-  if (!permitted) return "This connection needs permission to control the thread.";
+    return gt("Voice needs an enabled Codex provider for speech.");
+  if (!permitted) return gt("This connection needs permission to control the thread.");
   return null;
 }
 
@@ -72,13 +74,17 @@ function BoundVoiceButton({
   onOpen: () => void;
   voice: NonNullable<React.ContextType<typeof VoiceContext>>;
 }) {
+  const messages = useMessages();
+  const gt = useGT();
   const unavailable = useVoiceAvailability(target);
   const active = voice.view.state === "starting" || voice.view.state === "connected";
   const label = active
-    ? `Voice call controls, ${voiceCallStatus(voice.view).toLowerCase()}`
+    ? gt("Voice call controls, {status}", {
+        status: voiceCallStatus(voice.view, messages).toLowerCase(),
+      })
     : unavailable
-      ? "Voice unavailable"
-      : "Start voice call";
+      ? gt("Voice unavailable")
+      : gt("Start voice call");
   return (
     <div className="flex shrink-0 items-center gap-1">
       <Tooltip>
@@ -98,12 +104,14 @@ function BoundVoiceButton({
         <Tooltip>
           <TooltipTrigger
             render={<Button size="icon" variant="ghost-destructive" />}
-            aria-label="End call"
+            aria-label={gt("End call")}
             onClick={voice.controller.end}
           >
             <PhoneOffIcon />
           </TooltipTrigger>
-          <TooltipPopup>End call</TooltipPopup>
+          <TooltipPopup>
+            <T>End call</T>
+          </TooltipPopup>
         </Tooltip>
       ) : null}
     </div>
@@ -139,6 +147,7 @@ function VoiceConversation({
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
 }) {
+  const gt = useGT();
   const viewport = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
@@ -162,10 +171,10 @@ function VoiceConversation({
       <div className="flex items-center justify-between gap-2 border-t border-border/65 pt-2">
         <CollapsibleTrigger
           render={<Button variant="ghost-muted" size="sm" />}
-          aria-label={expanded ? "Hide conversation" : "Show conversation"}
+          aria-label={expanded ? gt("Hide conversation") : gt("Show conversation")}
         >
           {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
-          {active ? "Conversation" : "Last call conversation"}
+          {active ? gt("Conversation") : gt("Last call conversation")}
           {captions.length > 0 ? (
             <span className="text-2xs tabular-nums">{captions.length}</span>
           ) : null}
@@ -180,7 +189,7 @@ function VoiceConversation({
               if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
             }}
           >
-            Latest
+            <T>Latest</T>
           </Button>
         ) : null}
       </div>
@@ -189,7 +198,7 @@ function VoiceConversation({
           <div
             ref={viewport}
             role="log"
-            aria-label={active ? "Voice conversation" : "Last call conversation"}
+            aria-label={active ? gt("Voice conversation") : gt("Last call conversation")}
             aria-live={active ? "polite" : "off"}
             tabIndex={0}
             onScroll={(event) => {
@@ -202,13 +211,13 @@ function VoiceConversation({
           >
             {captions.length === 0 ? (
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Your words and Codex replies appear here.
+                <T>Your words and Codex replies appear here.</T>
               </p>
             ) : (
               captions.map((caption) => (
                 <div key={caption.sequence}>
                   <p className="mb-1 text-2xs font-medium text-muted-foreground">
-                    {caption.role === "user" ? "You" : "Codex"}
+                    {caption.role === "user" ? gt("You") : "Codex"}
                   </p>
                   <p className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed">
                     {caption.text}
@@ -235,6 +244,8 @@ function BoundVoicePanel({
   target: ScopedThreadRef;
   voice: NonNullable<React.ContextType<typeof VoiceContext>>;
 }) {
+  const messages = useMessages();
+  const gt = useGT();
   const unavailable = useVoiceAvailability(target);
   const { controller, view } = voice;
   const active = view.state === "starting" || view.state === "connected";
@@ -243,20 +254,24 @@ function BoundVoicePanel({
   const environment = useEnvironment(destination.environmentId);
   const anotherThread =
     destination.environmentId !== target.environmentId || destination.threadId !== target.threadId;
-  const destinationTitle = view.snapshot?.threadTitle || destinationThread?.title || "This thread";
+  const destinationTitle =
+    view.snapshot?.threadTitle || destinationThread?.title || gt("This thread");
   const captions = view.snapshot?.captions ?? [];
   const tasks = view.snapshot?.tasks ?? [];
   const pendingTasks = tasks.filter(
     (task) => task.state === "queued" || task.state === "working" || task.state === "waiting",
   );
   const task = selectVoiceTask(tasks);
-  const taskStatus = task ? voiceTaskStatusLabel(task.state) : null;
+  const taskStatus = task ? voiceTaskStatusLabel(task.state, messages) : null;
   const completedDurationSeconds = task ? voiceTaskCompletedSeconds(task) : null;
   const notice = view.message ?? (active ? view.snapshot?.message : null);
-  const status = view.state === "idle" && unavailable ? "Voice unavailable" : voiceCallStatus(view);
+  const status =
+    view.state === "idle" && unavailable
+      ? gt("Voice unavailable")
+      : voiceCallStatus(view, messages);
 
   return (
-    <ThreadDetailsSection headingId="orbit-voice-heading" title="Voice" separated={false}>
+    <ThreadDetailsSection headingId="orbit-voice-heading" title={gt("Voice")} separated={false}>
       <div className="space-y-4 px-1.5 pt-1 pb-2">
         <div className="flex items-center gap-3">
           <div
@@ -286,15 +301,15 @@ function BoundVoicePanel({
             <p className="text-xs leading-relaxed text-muted-foreground">
               {view.state === "starting"
                 ? view.microphone
-                  ? "Your microphone is ready."
-                  : "Check your browser’s microphone prompt."
+                  ? gt("Your microphone is ready.")
+                  : gt("Check your browser’s microphone prompt.")
                 : active
                   ? view.muted
-                    ? "Unmute when you’re ready to speak."
-                    : "Keep talking while your agent works."
+                    ? gt("Unmute when you’re ready to speak.")
+                    : gt("Keep talking while your agent works.")
                   : view.state === "idle"
-                    ? "Talk through an idea or ask for a change."
-                    : "Your microphone is off."}
+                    ? gt("Talk through an idea or ask for a change.")
+                    : gt("Your microphone is off.")}
             </p>
           </div>
           {view.state === "connected" && view.connectedAt !== null ? (
@@ -306,7 +321,7 @@ function BoundVoicePanel({
         <div className="space-y-0.5">
           <p className="line-clamp-2 wrap-anywhere text-sm font-medium">{destinationTitle}</p>
           <p className="truncate text-xs text-muted-foreground">
-            {environment?.label || "Call destination"}
+            {environment?.label || gt("Call destination")}
           </p>
           {anotherThread || (!active && tasks.length > 0) ? (
             <Link
@@ -314,7 +329,9 @@ function BoundVoicePanel({
               params={buildThreadRouteParams(destination)}
               className="inline-block max-w-full truncate text-xs text-primary underline underline-offset-2"
             >
-              Return to {destinationTitle}
+              <T>
+                Return to <Var>{destinationTitle}</Var>
+              </T>
             </Link>
           ) : null}
         </div>
@@ -328,11 +345,11 @@ function BoundVoicePanel({
                 onClick={controller.toggleMute}
               >
                 {view.muted ? <MicOffIcon /> : <MicIcon />}
-                {view.muted ? "Unmute" : "Mute"}
+                {view.muted ? gt("Unmute") : gt("Mute")}
               </Button>
               <Button variant="destructive" size="default" onClick={controller.end}>
                 <PhoneOffIcon />
-                End call
+                <T>End call</T>
               </Button>
             </>
           ) : (
@@ -342,13 +359,13 @@ function BoundVoicePanel({
               onClick={() => void controller.start(target)}
             >
               <AudioLinesIcon />
-              {anotherThread ? "Start voice here" : "Start voice call"}
+              {anotherThread ? gt("Start voice here") : gt("Start voice call")}
             </Button>
           )}
         </div>
         {!active && anotherThread ? (
           <p className="text-xs text-muted-foreground">
-            A new call uses the thread you are viewing.
+            <T>A new call uses the thread you are viewing.</T>
           </p>
         ) : null}
         {!active && unavailable ? (
@@ -369,24 +386,26 @@ function BoundVoicePanel({
         {view.playbackBlocked && active ? (
           <div className="space-y-2">
             <p role="status" className="text-xs text-muted-foreground">
-              Speaker audio is blocked.
+              <T>Speaker audio is blocked.</T>
             </p>
             <Button variant="outline" size="sm" onClick={() => void controller.retryPlayback()}>
               <Volume2Icon />
-              Enable speaker audio
+              <T>Enable speaker audio</T>
             </Button>
           </div>
         ) : null}
         {active && (taskStatus || view.snapshot?.routing) ? (
           <div className="space-y-1 border-t border-border/65 pt-3">
-            <p className="text-2xs font-medium text-muted-foreground">Coding task</p>
+            <p className="text-2xs font-medium text-muted-foreground">
+              <T>Coding task</T>
+            </p>
             <div role="status" className="space-y-1 text-xs leading-relaxed">
               {task?.title ? (
                 <p className="line-clamp-2 wrap-anywhere font-medium">{task.title}</p>
               ) : null}
               {view.snapshot?.routing ? (
                 <p ref={observeVisibleAnimation} className="live-tool-shine">
-                  Understanding your request…
+                  <T>Understanding your request…</T>
                 </p>
               ) : null}
               {task?.state === "working" ? (
@@ -397,23 +416,30 @@ function BoundVoicePanel({
                     className="size-3.5 motion-safe:visible-animate-spin text-muted-foreground"
                   />
                   <span ref={observeVisibleAnimation} className="live-tool-shine">
-                    Working for <WorkingTimer createdAt={DateTime.formatIso(task.startedAt)} />
+                    <T>
+                      Working for{" "}
+                      <Var>
+                        <WorkingTimer createdAt={DateTime.formatIso(task.startedAt)} />
+                      </Var>
+                    </T>
                   </span>
                 </p>
               ) : task?.state === "waiting" ? (
                 <p className="flex items-start gap-1.5 rounded-md bg-warning-surface px-2.5 py-2 text-warning-foreground">
                   <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-                  Paused. Approval waiting in the thread.
+                  <T>Paused. Approval waiting in the thread.</T>
                 </p>
               ) : task?.state === "completed" ? (
                 <p className="flex items-center gap-1.5 text-success-foreground">
                   <CircleCheckIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                  Completed for {formatCallClock(completedDurationSeconds ?? 0)}
+                  <T>
+                    Completed for <Var>{formatCallClock(completedDurationSeconds ?? 0)}</Var>
+                  </T>
                 </p>
               ) : task?.state === "failed" ? (
                 <p className="flex items-center gap-1.5 text-destructive">
                   <TriangleAlertIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                  Task failed
+                  <T>Task failed</T>
                 </p>
               ) : taskStatus ? (
                 <p>{taskStatus}</p>
@@ -442,14 +468,16 @@ function BoundVoicePanel({
               ) : null}
               {pendingTasks.length > 1 ? (
                 <p className="text-muted-foreground">
-                  {pendingTasks.length} accepted tasks pending
+                  <T>
+                    <Var>{pendingTasks.length}</Var> accepted tasks pending
+                  </T>
                 </p>
               ) : null}
             </div>
           </div>
         ) : !active && pendingTasks.length > 0 ? (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Check accepted work in the thread.
+            <T>Check accepted work in the thread.</T>
           </p>
         ) : null}
         {view.snapshot && (active || captions.length > 0) ? (
@@ -480,6 +508,8 @@ function BoundVoiceCallBar({
   onOpen: () => void;
   voice: NonNullable<React.ContextType<typeof VoiceContext>>;
 }) {
+  const messages = useMessages();
+  const gt = useGT();
   const { controller, view } = voice;
   const active = view.state === "starting" || view.state === "connected";
   const sameThread =
@@ -495,7 +525,7 @@ function BoundVoiceCallBar({
     <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1.5 text-xs">
       <button
         type="button"
-        aria-label="Open voice controls"
+        aria-label={gt("Open voice controls")}
         onClick={onOpen}
         className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-accent"
       >
@@ -509,7 +539,7 @@ function BoundVoiceCallBar({
           role="status"
           className={cn("shrink-0 font-medium", view.activity !== null && "live-tool-shine")}
         >
-          {voiceCallStatus(view)}
+          {voiceCallStatus(view, messages)}
         </span>
         {working ? (
           <span className="flex shrink-0 items-center gap-1 tabular-nums text-muted-foreground">
@@ -522,7 +552,9 @@ function BoundVoiceCallBar({
           </span>
         ) : null}
         {waiting ? (
-          <span className="shrink-0 font-medium text-warning-foreground">Approval waiting</span>
+          <span className="shrink-0 font-medium text-warning-foreground">
+            <T>Approval waiting</T>
+          </span>
         ) : null}
         {lastCaption ? (
           <span className="min-w-0 truncate text-muted-foreground">{lastCaption}</span>
@@ -531,7 +563,7 @@ function BoundVoiceCallBar({
       <Button
         variant="ghost-muted"
         size="icon-xs"
-        aria-label={view.muted ? "Unmute" : "Mute"}
+        aria-label={view.muted ? gt("Unmute") : gt("Mute")}
         aria-pressed={view.muted}
         onClick={controller.toggleMute}
       >
@@ -540,7 +572,7 @@ function BoundVoiceCallBar({
       <Button
         variant="ghost-destructive"
         size="icon-xs"
-        aria-label="End call"
+        aria-label={gt("End call")}
         onClick={controller.end}
       >
         <PhoneOffIcon />
