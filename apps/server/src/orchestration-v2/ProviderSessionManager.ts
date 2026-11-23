@@ -77,6 +77,10 @@ import {
 } from "@t3tools/provider-core/server/subagentProjection";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import {
+  hermesRestartRecoveryCandidate,
+  hermesResumeRefusalReason,
+} from "./HermesRestartRecovery.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 // Without native resume, a released session comes back as a summary of the thread, so it stays longer.
@@ -273,6 +277,7 @@ export interface ProviderSessionManagerV2Shape {
     readonly providerSessionId: ProviderSessionId;
     readonly reason: ProviderSessionReleaseReason;
     readonly detail?: string;
+    readonly preservePendingRequest?: boolean;
   }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
   readonly detach: (input: {
     readonly providerSessionId: ProviderSessionId;
@@ -857,12 +862,46 @@ export const layerWithOptions = (
         return threadIds;
       };
 
+      const preservedHermesRequestId = Effect.fn("ProviderSessionManager.preservedHermesRequestId")(
+        function* (input: {
+          readonly entry: LiveSessionEntry;
+          readonly reason: ProviderSessionReleaseReason;
+          readonly threadId: ThreadId;
+          readonly preservePendingRequest?: boolean;
+        }) {
+          if (
+            (input.reason !== "server_shutdown" && input.preservePendingRequest !== true) ||
+            input.entry.runtime.driver !== "hermes" ||
+            input.entry.runtime.canResumeAfterRestart !== true ||
+            input.entry.runtime.resumeTurn === undefined ||
+            Option.isNone(serverSettings)
+          )
+            return undefined;
+          const settings = yield* serverSettings.value.getSettings.pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          if (settings === null) return undefined;
+          const projection = yield* projectionStore.getRuntimeRecoveryProjection(input.threadId);
+          if (
+            !resolveProjectSettings(settings, projection.thread.projectId).settings
+              .continueThreadsAfterServerUpdate
+          )
+            return undefined;
+          const candidate = hermesRestartRecoveryCandidate(projection);
+          return candidate?.providerThread.providerSessionId ===
+            input.entry.runtime.providerSessionId
+            ? candidate.request.id
+            : undefined;
+        },
+      );
+
       const writeReleasedRuntimeRequestEvents = Effect.fn(
         "ProviderSessionManager.writeReleasedRuntimeRequestEvents",
       )(function* (input: {
         readonly entry: LiveSessionEntry;
         readonly reason: ProviderSessionReleaseReason;
         readonly releasedAt: DateTime.Utc;
+        readonly preservePendingRequest?: boolean;
         readonly detachedThreadId?: ThreadId;
       }) {
         const providerSessionId = input.entry.runtime.providerSessionId;
@@ -875,6 +914,12 @@ export const layerWithOptions = (
 
         const events: Array<OrchestrationV2DomainEvent> = [];
         for (const threadId of releasedThreadIds(input)) {
+          const preservedRequestId = yield* preservedHermesRequestId({
+            entry: input.entry,
+            reason: input.reason,
+            threadId,
+            ...(input.preservePendingRequest === true ? { preservePendingRequest: true } : {}),
+          });
           const projection = yield* projectionStore.getThreadRecords(
             threadId,
             ["runtimeRequests"],
@@ -885,11 +930,32 @@ export const layerWithOptions = (
               request.status === "pending" &&
               request.responseCapability.type === "live" &&
               request.responseCapability.providerSessionId === providerSessionId &&
+              request.id !== preservedRequestId &&
               DateTime.isLessThanOrEqualTo(request.createdAt, input.releasedAt) &&
               // Shutdown reconciliation decides which questions can survive the lost callback.
               !(input.reason === "server_shutdown" && request.kind === "user_input"),
           );
 
+          const preservedRequest = projection.runtimeRequests.find(
+            (request) =>
+              request.id === preservedRequestId &&
+              request.responseCapability.type === "live" &&
+              request.responseCapability.providerSessionId === providerSessionId,
+          );
+          if (input.preservePendingRequest === true && preservedRequest !== undefined) {
+            events.push({
+              id: yield* idAllocator.allocate.event({ threadId, providerSessionId }),
+              type: "runtime-request.updated",
+              threadId,
+              nodeId: preservedRequest.nodeId,
+              driver: input.entry.runtime.driver,
+              occurredAt: now,
+              payload: {
+                ...preservedRequest,
+                responseCapability: { type: "not_resumable", reason: hermesResumeRefusalReason },
+              },
+            });
+          }
           if (releasedRequests.length === 0) continue;
           const records = yield* projectionStore.getThreadRecords(
             threadId,
@@ -1518,6 +1584,7 @@ export const layerWithOptions = (
         readonly providerSessionId: ProviderSessionId;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
+        readonly preservePendingRequest?: boolean;
         readonly detachedThreadId?: ThreadId;
         readonly cancelIdleFiber?: boolean;
         readonly onlyIfIdleGeneration?: number;
@@ -1575,6 +1642,9 @@ export const layerWithOptions = (
                     entry,
                     reason: input.reason,
                     ...(input.detail === undefined ? {} : { detail: input.detail }),
+                    ...(input.preservePendingRequest === true
+                      ? { preservePendingRequest: true }
+                      : {}),
                     releasedProviderThreads,
                     releasedAt,
                     ...detachedThread,

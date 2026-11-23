@@ -23,6 +23,11 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import {
+  hermesReservedRestartCandidate,
+  hermesRestartRecoveryCandidate,
+  hermesResumeRefusalReason,
+} from "./HermesRestartRecovery.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   restartContinuationBlocked,
@@ -260,7 +265,41 @@ export const make = Effect.gen(function* () {
       stoppedThisPass: ReadonlyMap<string, RecoverySession> = new Map(),
     ) {
       const now = yield* DateTime.now;
-      const projection = yield* rewindUnacceptedRuns(stored);
+      const recovered = yield* rewindUnacceptedRuns(stored);
+      const acceptedHermes = continueAfterRestart
+        ? hermesRestartRecoveryCandidate(recovered)
+        : undefined;
+      const reservedHermes =
+        continueAfterRestart && acceptedHermes === undefined
+          ? yield* hermesReservedRestartCandidate(stored, projections.getThreadRecords).pipe(
+              Effect.mapError((cause) =>
+                cause._tag === "HermesReservationReadError"
+                  ? cause
+                  : new ProviderRuntimeRecoveryError({
+                      operation: "read-projections",
+                      threadId: stored.thread.id,
+                      cause,
+                    }),
+              ),
+            )
+          : undefined;
+      const preserved = acceptedHermes ?? reservedHermes;
+      const projection =
+        preserved === undefined
+          ? recovered
+          : {
+              ...recovered,
+              runs: recovered.runs.filter((run) => run.id !== preserved.run.id),
+              attempts: recovered.attempts.filter((attempt) => attempt.id !== preserved.attempt.id),
+              providerTurns: recovered.providerTurns.filter(
+                (turn) => turn.id !== acceptedHermes?.providerTurn.id,
+              ),
+              runtimeRequests: recovered.runtimeRequests.filter(
+                (request) => request.id !== acceptedHermes?.request.id,
+              ),
+              nodes: recovered.nodes.filter((node) => node.runId !== preserved.run.id),
+              turnItems: recovered.turnItems.filter((item) => item.runId !== preserved.run.id),
+            };
       let runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
       for (const run of nonterminalRuns(projection)) {
         if (run.status === "waiting") {
@@ -326,6 +365,26 @@ export const make = Effect.gen(function* () {
         ),
       ]);
       const detail = `Cancelled because the server ${trigger === "startup" ? "restarted" : "shut down"} before the provider work completed.`;
+      const preservedContinuationEffectIds =
+        preserved === undefined
+          ? []
+          : yield* outbox
+              .cancelUnsettled({
+                threadId: projection.thread.id,
+                effectTypes: ["provider-runtime.continue"],
+                effectIds: [`effect:restart-continuation:${preserved.run.id}`],
+                reason: "The original Hermes turn is resumable without a continuation.",
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderRuntimeRecoveryError({
+                      operation: "reconcile",
+                      threadId: projection.thread.id,
+                      cause,
+                    }),
+                ),
+              );
       const commandId = CommandId.make(
         `command:runtime-reconcile:${trigger}:${projection.thread.id}:${DateTime.formatIso(now)}`,
       );
@@ -341,6 +400,21 @@ export const make = Effect.gen(function* () {
           ),
         );
       const events: Array<OrchestrationV2DomainEvent> = [];
+      // The old callback is gone. Only a successful reattach may publish a live route again.
+      if (trigger === "startup" && acceptedHermes?.request.responseCapability.type === "live") {
+        events.push({
+          id: yield* allocateEventId(),
+          type: "runtime-request.updated",
+          threadId: projection.thread.id,
+          nodeId: acceptedHermes.request.nodeId,
+          driver: acceptedHermes.providerThread.driver,
+          occurredAt: now,
+          payload: {
+            ...acceptedHermes.request,
+            responseCapability: { type: "not_resumable", reason: hermesResumeRefusalReason },
+          },
+        });
+      }
       const cancelledBackgroundWork = new Map<
         ProviderThreadId,
         Array<OrchestrationV2RestartCancelledBackgroundWork>
@@ -1034,7 +1108,7 @@ export const make = Effect.gen(function* () {
         (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
       ).length;
       let retiredEffects: number;
-      let cancelledEffectIds: ReadonlyArray<string> = [];
+      let cancelledEffectIds: ReadonlyArray<string> = preservedContinuationEffectIds;
       if (events.length === 0) {
         const retiredEffectIds = yield* outbox
           .cancelUnsettled({
@@ -1052,8 +1126,8 @@ export const make = Effect.gen(function* () {
                 }),
             ),
           );
-        cancelledEffectIds = retiredEffectIds;
-        retiredEffects = retiredEffectIds.length;
+        cancelledEffectIds = [...preservedContinuationEffectIds, ...retiredEffectIds];
+        retiredEffects = cancelledEffectIds.length;
       } else {
         const result = yield* eventSink
           .commitCommand({
@@ -1078,7 +1152,7 @@ export const make = Effect.gen(function* () {
                 }),
             ),
           );
-        retiredEffects = result.cancelledEffectCount;
+        retiredEffects = preservedContinuationEffectIds.length + result.cancelledEffectCount;
       }
       return {
         terminalizedRuns: runs.length,
@@ -1129,7 +1203,21 @@ export const make = Effect.gen(function* () {
             continueAfterRestart !== null &&
             resolveProjectSettings(continueAfterRestart, projection.thread.projectId).settings
               .continueThreadsAfterServerUpdate;
-          const result = yield* reconcileProjection(projection, trigger, enabled, stoppedThisPass);
+          const result = yield* reconcileProjection(
+            projection,
+            trigger,
+            enabled,
+            stoppedThisPass,
+          ).pipe(
+            Effect.catchTags({
+              HermesReservationReadError: (cause) =>
+                Effect.logWarning("Skipping Hermes thread with an unreadable turn reservation", {
+                  threadId,
+                  cause,
+                }),
+            }),
+          );
+          if (result === undefined) continue;
           for (const session of projection.providerSessions) {
             if (session.status !== "stopped" && session.status !== "error") {
               stoppedThisPass.set(session.id, session);
@@ -1204,6 +1292,19 @@ export const make = Effect.gen(function* () {
               .continueThreadsAfterServerUpdate
           )
             return;
+          const preserved =
+            hermesRestartRecoveryCandidate(projection) ??
+            (yield* hermesReservedRestartCandidate(projection, projections.getThreadRecords));
+          if (preserved !== undefined) {
+            const cancelled = yield* outbox.cancelUnsettled({
+              threadId,
+              effectTypes: ["provider-runtime.continue"],
+              effectIds: [`effect:restart-continuation:${preserved.run.id}`],
+              reason: "The original Hermes turn is resumable without a continuation.",
+            });
+            yield* outbox.signalCancellations(cancelled);
+            return;
+          }
           const run = restartContinuationRun(
             yield* rewindUnacceptedRuns(projection),
             yield* DateTime.now,
@@ -1241,9 +1342,7 @@ export const make = Effect.gen(function* () {
     Effect.mapError((cause) => new ProviderRuntimeRecoveryError({ operation: "reconcile", cause })),
   );
 
-  const recover = Effect.gen(function* () {
-    return (yield* reconcile("startup")) satisfies ProviderRuntimeRecoverySummary;
-  });
+  const recover = reconcile("startup");
 
   return ProviderRuntimeRecoveryService.of({ reconcile, prepareForShutdown, recover });
 });

@@ -89,9 +89,11 @@ export const HermesDriver: ProviderDriver<HermesSettingsValue, ProviderHost.Prov
           }),
       ),
     );
+    const host = yield* ProviderHost.ProviderHost;
     const orchestrationAdapter = makeHermesAdapterV2({
       instanceId: input.instanceId,
       settings: config,
+      resolveAttachmentPath: host.resolveAttachmentPath,
     });
     return {
       instanceId: input.instanceId,

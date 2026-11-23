@@ -473,6 +473,12 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
   state: Ref.Ref<TestProviderRuntimeState>,
   options: {
     readonly failEventStream?: boolean;
+    readonly driver?: ProviderDriverKind;
+    readonly instanceId?: ProviderInstanceId;
+    readonly canResumeAfterRestart?: boolean;
+    readonly resumeTurn?: (
+      input: ProviderAdapter.ProviderAdapterV2ResumeTurnInput,
+    ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterV2Error>;
     readonly normalizeThreadLoadModelSelection?: (selection: ModelSelection) => ModelSelection;
     readonly capabilities?: OrchestrationV2ProviderCapabilities;
     readonly extensionStatuses?: OrchestrationV2ProviderSession["extensionStatuses"];
@@ -497,6 +503,8 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly eventStreamsEnded?: Queue.Queue<ProviderSessionId>;
   } = {},
 ) {
+  const driver = options.driver ?? CODEX_DRIVER;
+  const instanceId = options.instanceId ?? modelSelection.instanceId;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const countClose = Effect.addFinalizer(() =>
     Ref.update(state, (current) => ({
@@ -516,8 +524,8 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     ).pipe(Effect.andThen(Effect.never)),
   );
   return ProviderAdapter.ProviderAdapterV2.of({
-    instanceId: ProviderInstanceId.make("codex"),
-    driver: CODEX_DRIVER,
+    instanceId,
+    driver,
     getCapabilities: () => Effect.succeed(options.capabilities ?? CodexCapabilities),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: (input) =>
@@ -545,6 +553,8 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
             now,
             ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
           }),
+          driver,
+          providerInstanceId: instanceId,
           ...(options.extensionStatuses === undefined
             ? {}
             : { extensionStatuses: options.extensionStatuses }),
@@ -564,8 +574,8 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
         }
 
         return {
-          instanceId: ProviderInstanceId.make("codex"),
-          driver: CODEX_DRIVER,
+          instanceId,
+          driver,
           providerSessionId: input.providerSessionId,
           ...(options.normalizeThreadLoadModelSelection === undefined
             ? {}
@@ -576,7 +586,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
           events: options.failEventStream
             ? Stream.fail(
                 new ProviderAdapter.ProviderAdapterEventStreamError({
-                  driver: CODEX_DRIVER,
+                  driver,
                   providerSessionId: input.providerSessionId,
                   cause: "process exited",
                 }),
@@ -611,8 +621,11 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
               resumeCount: current.resumeCount + 1,
             })).pipe(Effect.as(threadInput.providerThread)),
           startTurn: () => options.startTurn ?? Effect.void,
-          resumeTurn: () => options.startTurn ?? Effect.void,
+          resumeTurn: (input) => options.resumeTurn?.(input) ?? options.startTurn ?? Effect.void,
           compactThread: () => options.startTurn ?? Effect.void,
+          ...(options.canResumeAfterRestart === undefined
+            ? {}
+            : { canResumeAfterRestart: options.canResumeAfterRestart }),
           steerTurn: () => Effect.void,
           interruptTurn: () =>
             Ref.update(state, (current) => ({
@@ -652,6 +665,12 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
 function layerTest(input: {
   readonly state: Ref.Ref<TestProviderRuntimeState>;
   readonly idleTimeoutMs?: number;
+  readonly adapterDriver?: ProviderDriverKind;
+  readonly adapterInstanceId?: ProviderInstanceId;
+  readonly canResumeAfterRestart?: boolean;
+  readonly resumeTurn?: (
+    input: ProviderAdapter.ProviderAdapterV2ResumeTurnInput,
+  ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterV2Error>;
   readonly maxIdlePinMs?: number;
   readonly failEventStream?: boolean;
   readonly normalizeThreadLoadModelSelection?: (selection: ModelSelection) => ModelSelection;
@@ -708,6 +727,12 @@ function layerTest(input: {
   const layerRegistry = Layer.unwrap(
     makeProviderAdapter(input.state, {
       failEventStream: input.failEventStream ?? false,
+      ...(input.adapterDriver === undefined ? {} : { driver: input.adapterDriver }),
+      ...(input.adapterInstanceId === undefined ? {} : { instanceId: input.adapterInstanceId }),
+      ...(input.canResumeAfterRestart === undefined
+        ? {}
+        : { canResumeAfterRestart: input.canResumeAfterRestart }),
+      ...(input.resumeTurn === undefined ? {} : { resumeTurn: input.resumeTurn }),
       ...(input.normalizeThreadLoadModelSelection === undefined
         ? {}
         : { normalizeThreadLoadModelSelection: input.normalizeThreadLoadModelSelection }),

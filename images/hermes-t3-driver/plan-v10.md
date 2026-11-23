@@ -211,6 +211,8 @@ No G1 code begins while G0 is failing or this revision lacks the required counci
 
 ## 7. Acceptance limits
 
+PR #11 scope amendment: live model and reasoning changes are deferred. T3 submits new turns only with the configured Hermes profile selection and rejects custom selections before any mutation or prompt submission. This does not waive the other G3 release tests or allow G4 to start before G3 passes.
+
 This revision intentionally does not provide seamless recovery of an open approval or clarification across a Hermes Gateway restart. It provides deterministic failure, cleanup, and a usable thread.
 
 If seamless recovery later becomes required, change Hermes to persist and reoffer server requests, then repeat the complete no-degradation G0 gate. Do not describe the revised behavior as durable prompt recovery.

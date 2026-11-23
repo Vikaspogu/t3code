@@ -32,7 +32,8 @@ export const makeHermesSnapshot = Effect.fn("HermesProvider.snapshot")(function*
             token,
             hermesOrigin(settings.endpoint),
           );
-          const runtime = asRuntimeDescription(yield* gateway.request("runtime.describe", {}));
+          const connection = yield* gateway.connection;
+          const runtime = asRuntimeDescription(yield* connection.request("runtime.describe", {}));
           if (runtime.profile_id !== settings.profileId) {
             throw new Error("Hermes runtime profile does not match provider configuration");
           }
