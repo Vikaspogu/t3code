@@ -501,6 +501,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
   },
   {
+    id: "pinned-status",
+    title: msg("Pinned thread status"),
+    to: "/settings/general",
+    searchTerms: [msg("collapsed pinned summary needs you failed new working priority preview")],
+  },
+  {
     id: "boring-sidebar",
     title: msg("Boring sidebar (group by project)"),
     to: "/settings/labs",

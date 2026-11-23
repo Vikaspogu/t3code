@@ -38,6 +38,9 @@ import {
   resolveSidebarDropVerb,
   groupSidebarThreadsByProject,
   resolveSidebarFolderDot,
+  resolvePinnedSidebarSummary,
+  selectPinnedSidebarPreview,
+  resolvePinnedSidebarVisibleThreads,
   sidebarFolderExpansionKeys,
   withoutRemovedCheckout,
 } from "./Sidebar.logic";
@@ -1714,40 +1717,120 @@ describe("groupSidebarThreadsByProject", () => {
   });
 });
 
-describe("resolveSidebarFolderDot", () => {
-  it("flags the most urgent hidden thread and stays quiet otherwise", () => {
-    const idle = {
-      hasActionableProposedPlan: false,
-      hasPendingApprovals: false,
-      hasPendingUserInput: false,
-      interactionMode: "default" as const,
-      latestRun: makeLatestRun(),
-      lastVisitedAt: "2026-03-09T10:06:00.000Z",
-      runtime: null,
-    };
-    const runtime = {
-      status: "running" as const,
-      activeRunId: null,
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      providerName: "Codex",
-      lastError: null,
-      updatedAt: "2026-03-09T10:00:00.000Z",
-    };
-    const working = { ...idle, runtime };
-    const unread = { ...idle, lastVisitedAt: "2026-03-09T10:04:00.000Z" };
-    const limited = {
-      ...idle,
-      runtime: { ...runtime, status: "failed" as const, lastErrorClass: "usage_limit" as const },
+describe("Sidebar status helpers", () => {
+  const idle = {
+    hasActionableProposedPlan: false,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    interactionMode: "default" as const,
+    latestRun: makeLatestRun(),
+    lastVisitedAt: "2026-03-09T10:06:00.000Z",
+    runtime: null,
+  };
+  const runtime = {
+    status: "running" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: "Codex",
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  };
+  const working = { ...idle, runtime };
+  const unread = { ...idle, lastVisitedAt: "2026-03-09T10:04:00.000Z" };
+  const limited = {
+    ...idle,
+    runtime: { ...runtime, status: "failed" as const, lastErrorClass: "usage_limit" as const },
+  };
+  const failed = {
+    ...idle,
+    runtime: { ...runtime, status: "failed" as const, lastErrorClass: "unknown" as const },
+  };
+
+  describe("resolveSidebarFolderDot", () => {
+    it("flags the most urgent hidden thread and stays quiet otherwise", () => {
+      expect(resolveSidebarFolderDot([idle])).toBeNull();
+      // A waiting thread stays quiet even with an unread completion, like its row.
+      expect(
+        resolveSidebarFolderDot([{ ...unread, runtime: { ...runtime, status: "idle" as const } }]),
+      ).toBeNull();
+      expect(resolveSidebarFolderDot([idle, working])).toBe("working");
+      expect(resolveSidebarFolderDot([working, unread])).toBe("unread");
+      expect(resolveSidebarFolderDot([unread, limited])).toBe("attention");
+    });
+  });
+
+  describe("resolvePinnedSidebarSummary", () => {
+    it("counts each visible status", () => {
+      expect(resolvePinnedSidebarSummary([idle, working, unread, limited, failed])).toEqual({
+        attention: 1,
+        failed: 1,
+        done: 1,
+        working: 1,
+      });
+    });
+  });
+
+  describe("selectPinnedSidebarPreview", () => {
+    it("selects attention before failure and ignores settled threads", () => {
+      expect(selectPinnedSidebarPreview([working, failed, limited])).toBe(limited);
+      expect(selectPinnedSidebarPreview([working, failed, unread])).toBe(failed);
+      expect(selectPinnedSidebarPreview([idle, working, unread])).toBeNull();
+    });
+  });
+
+  describe("resolvePinnedSidebarVisibleThreads", () => {
+    const rows = [
+      { ...failed, id: "failed" },
+      { ...limited, id: "limited" },
+      { ...working, id: "working" },
+    ];
+    const collapse = {
+      threads: rows,
+      routeRowThreadKey: "failed",
+      threadKey: (thread: (typeof rows)[number]) => thread.id,
     };
 
-    expect(resolveSidebarFolderDot([idle])).toBeNull();
-    // A waiting thread stays quiet even with an unread completion, like its row.
-    expect(
-      resolveSidebarFolderDot([{ ...unread, runtime: { ...runtime, status: "idle" as const } }]),
-    ).toBeNull();
-    expect(resolveSidebarFolderDot([idle, working])).toBe("working");
-    expect(resolveSidebarFolderDot([working, unread])).toBe("unread");
-    expect(resolveSidebarFolderDot([unread, limited])).toBe("attention");
+    it("preserves expanded rows and setting-off route-only behavior", () => {
+      expect(
+        resolvePinnedSidebarVisibleThreads({ ...collapse, expanded: true, statusEnabled: true }),
+      ).toBe(rows);
+      expect(
+        resolvePinnedSidebarVisibleThreads({ ...collapse, expanded: false, statusEnabled: false }),
+      ).toEqual([rows[0]]);
+    });
+
+    it("puts the preview before a distinct route row without duplicating a shared row", () => {
+      expect(
+        resolvePinnedSidebarVisibleThreads({ ...collapse, expanded: false, statusEnabled: true }),
+      ).toEqual([rows[1], rows[0]]);
+      expect(
+        resolvePinnedSidebarVisibleThreads({
+          ...collapse,
+          routeRowThreadKey: "limited",
+          expanded: false,
+          statusEnabled: true,
+        }),
+      ).toEqual([rows[1]]);
+    });
+
+    it("passes local visits through to preview selection", () => {
+      const visitedFailure = {
+        ...failed,
+        id: "failed",
+        lastVisitedAt: undefined,
+        latestRun: { ...makeLatestRun(), status: "failed" as const },
+      };
+      expect(
+        resolvePinnedSidebarVisibleThreads({
+          threads: [visitedFailure],
+          expanded: false,
+          statusEnabled: true,
+          routeRowThreadKey: null,
+          threadKey: (thread) => thread.id,
+          getLocalLastVisitedAt: () => "2026-03-09T10:06:00.000Z",
+        }),
+      ).toEqual([]);
+    });
   });
 });
 

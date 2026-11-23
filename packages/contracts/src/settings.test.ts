@@ -332,6 +332,16 @@ describe("ClientSettings notifications", () => {
   });
 });
 
+describe("ClientSettings sidebar", () => {
+  it("keeps pinned status summaries opt-in", () => {
+    expect(decodeClientSettings({}).sidebarPinnedStatusEnabled).toBe(false);
+    expect(
+      decodeClientSettings({ sidebarPinnedStatusEnabled: true }).sidebarPinnedStatusEnabled,
+    ).toBe(true);
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("sidebarPinnedStatusEnabled");
+  });
+});
+
 describe("ClientSettings quit confirmation", () => {
   it.each([
     [true, "hold"],

@@ -544,6 +544,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? [gt("Working section")]
       : []),
+    ...(settings.sidebarPinnedStatusEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedStatusEnabled
+      ? [gt("Pinned thread status")]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? [gt("Auto-settle inactive threads")]
       : []),
@@ -739,6 +742,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarPinnedStatusEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedStatusEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -982,6 +986,37 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label={gt("Working section")}
+            />
+          }
+        />
+        <SettingsRow
+          {...setting("pinned-status")}
+          description={
+            <T>
+              Show needs-you, failed, new, and working counts when Pinned is collapsed, plus the
+              thread that needs attention first.
+            </T>
+          }
+          resetAction={
+            settings.sidebarPinnedStatusEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarPinnedStatusEnabled ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset pinned thread status to default")}
+                onClick={() =>
+                  updateSettings({
+                    sidebarPinnedStatusEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedStatusEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarPinnedStatusEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarPinnedStatusEnabled: Boolean(checked) })
+              }
+              aria-label={gt("Pinned thread status")}
             />
           }
         />
