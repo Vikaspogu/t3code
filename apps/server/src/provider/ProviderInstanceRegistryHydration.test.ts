@@ -104,6 +104,22 @@ describe("deriveProviderInstanceConfigMap", () => {
 
     expect(merged[instanceId]).toBe(settings.providerInstances[instanceId]);
   });
+
+  it("creates Hermes only after explicit configuration", () => {
+    const empty = deriveProviderInstanceConfigMap(settingsWith({ providerInstances: {} }));
+    expect(empty[ProviderInstanceId.make("codex")]).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+    });
+    expect(empty[ProviderInstanceId.make("hermes")]).toBeUndefined();
+
+    const configured = ProviderInstanceId.make("hermes");
+    const instance = { driver: ProviderDriverKind.make("hermes") };
+    expect(
+      deriveProviderInstanceConfigMap(
+        settingsWith({ providerInstances: { [configured]: instance } }),
+      )[configured],
+    ).toEqual(instance);
+  });
 });
 
 describe("seedDevReplayInstance", () => {
