@@ -1,0 +1,22 @@
+diff --git a/android/src/main/java/expo/modules/observe/ObservabilityManager.kt b/android/src/main/java/expo/modules/observe/ObservabilityManager.kt
+--- a/android/src/main/java/expo/modules/observe/ObservabilityManager.kt
++++ b/android/src/main/java/expo/modules/observe/ObservabilityManager.kt
+@@ -386,5 +386,5 @@ class ObservabilityManager(
+   private fun shouldDispatch(config: PersistedConfig?, rate: Double?): Boolean {
+-    val dispatchingEnabled = config?.dispatchingEnabled ?: true
++    val dispatchingEnabled = config?.dispatchingEnabled ?: false
+     val dispatchInDebug = config?.dispatchInDebug ?: false
+     // `isDev` is the OR of the JS-bundle dev flag (pushed via `setBundleDefaults` on JS
+     // package import) and the native build's debug flag. Either being true means the
+diff --git a/ios/Observability.swift b/ios/Observability.swift
+--- a/ios/Observability.swift
++++ b/ios/Observability.swift
+@@ -382,6 +382,6 @@ class ObservabilityManager {
+     isDev: Bool,
+     isInSample: Bool
+   ) -> Bool {
+-    let dispatchingEnabled = config?.dispatchingEnabled ?? true
++    let dispatchingEnabled = config?.dispatchingEnabled ?? false
+     let dispatchInDebug = config?.dispatchInDebug ?? false
+     return dispatchingEnabled && isInSample && (!isDev || dispatchInDebug)
+   }

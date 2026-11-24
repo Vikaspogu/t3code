@@ -154,7 +154,7 @@ export interface Preferences {
   readonly codeFontSize?: number | null;
   readonly codeWordBreak?: boolean;
   readonly mathRenderingEnabled?: boolean;
-  /** Unset means on: crash reports are sent unless the user turns them off. */
+  /** Unset means off: crash reports are sent only after the user opts in. */
   readonly crashReportsEnabled?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
