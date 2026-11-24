@@ -2,6 +2,13 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
   <application>
+    <service
+      android:name=".SelfHostedPushService"
+      android:exported="false">
+      <intent-filter>
+        <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+      </intent-filter>
+    </service>
     <service android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService" tools:node="remove" />
     <service android:name=".AgentMessagingService" android:exported="false">
       <intent-filter>

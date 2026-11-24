@@ -30,6 +30,11 @@ import {
   snoozedCompletion,
 } from "../relay/AgentAwarenessRelay.ts";
 import { forkParked } from "../serverActivation.ts";
+import {
+  MAX_NATIVE_ALERT_AGE_MS,
+  makeUnifiedPushRequest,
+  readUnifiedPushRegistration,
+} from "./NtfyUnifiedPush.ts";
 
 const KINDS = ["approval", "input", "failed", "completed"] as const;
 type AlertKind = (typeof KINDS)[number];
@@ -60,6 +65,7 @@ export const readConfig = Effect.gen(function* () {
     return yield* new NtfyConfigError();
   const topic = (yield* Config.String("T3CODE_NTFY_TOPIC")).trim();
   const tokenFile = yield* Config.String("T3CODE_NTFY_TOKEN_FILE");
+  const upFile = yield* Config.String("T3CODE_NTFY_UP_FILE").pipe(Config.option);
   const configuredEvents = yield* Config.String("T3CODE_NTFY_EVENTS").pipe(
     Config.withDefault(KINDS.join(",")),
   );
@@ -74,7 +80,7 @@ export const readConfig = Effect.gen(function* () {
   if (!/^[A-Za-z0-9_-]+$/.test(topic) || token.length === 0) {
     return yield* new NtfyConfigError();
   }
-  return { url: url.href.replace(/\/+$/, ""), topic, token: Redacted.make(token), events };
+  return { url: url.href.replace(/\/+$/, ""), topic, token: Redacted.make(token), events, upFile };
 });
 
 function decideNtfyAlert(input: {
@@ -136,9 +142,14 @@ export const make = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;
   const scope = yield* Effect.scope;
   const startedAt = (yield* DateTime.now).epochMilliseconds;
-  const doneKeys = new Map<ThreadId, Set<string>>();
+  const makeDeliveryState = () => ({
+    doneKeys: new Map<ThreadId, Set<string>>(),
+    retries: new Map<ThreadId, { key: string; attempt: number; nextAt: number }>(),
+  });
+  const topicDelivery = makeDeliveryState();
+  const deliveredAlerts = makeDeliveryState();
+  const nativeDeliveries = new Map<string, ReturnType<typeof makeDeliveryState>>();
   const holds = new Map<ThreadId, { key: string; deadlineMs: number }>();
-  const retries = new Map<ThreadId, { key: string; attempt: number; nextAt: number }>();
   const snoozes = new Map<ThreadId, Pick<AgentAwarenessThread, "snoozedAt" | "snoozedUntil">>();
   const subagentRequests = new Map<
     ThreadId,
@@ -149,14 +160,32 @@ export const make = Effect.gen(function* () {
   >();
   let enqueue: (threadId: ThreadId) => Effect.Effect<void> = () => Effect.void;
 
+  let invalidRegistration = false;
+  const readRegistration = Option.isSome(config.upFile)
+    ? readUnifiedPushRegistration(
+        config.upFile.value,
+        config.url,
+        environmentId,
+        config.token,
+      ).pipe(
+        Effect.tap((registration) => {
+          const wasInvalid = invalidRegistration;
+          invalidRegistration = registration === "invalid";
+          return invalidRegistration && !wasInvalid
+            ? Effect.logWarning("ntfy native push configuration invalid; alerts suppressed")
+            : Effect.void;
+        }),
+      )
+    : Effect.succeed("absent" as const);
+
   // These per-event helpers share evaluate's tracing boundary.
   const readThread = (threadId: ThreadId) =>
     threads
       .getAgentAwarenessSnapshot(threadId)
       .pipe(Effect.map((snapshot) => snapshot.threads[0] ?? null));
-  const waitingRequestId = (thread: AgentAwarenessThread | null) =>
+  const waitingRequest = (thread: AgentAwarenessThread | null) =>
     thread !== null && thread.archivedAt === null && subagentAwaitsUser(thread)
-      ? thread.pendingRuntimeRequest?.id
+      ? (thread.pendingRuntimeRequest ?? undefined)
       : undefined;
   const findTopLevelThreadId = Effect.fnUntraced(function* (child: AgentAwarenessThread) {
     const seen = new Set<ThreadId>([child.id]);
@@ -176,7 +205,7 @@ export const make = Effect.gen(function* () {
     threadId: ThreadId,
     thread: AgentAwarenessThread | null,
   ) {
-    const requestId = waitingRequestId(thread);
+    const requestId = waitingRequest(thread)?.id;
     const previous = subagentRequests.get(threadId);
     if (thread === null || requestId === undefined) {
       if (previous === undefined) return;
@@ -189,29 +218,33 @@ export const make = Effect.gen(function* () {
     subagentRequests.set(threadId, { topLevelThreadId, requestId });
     yield* enqueue(topLevelThreadId);
   });
-  const currentSubagentRequestFor = Effect.fnUntraced(function* (topLevelThreadId: ThreadId) {
-    let pending: SubagentRequestAwareness | null = null;
+  const currentSubagentRequestFor = Effect.fnUntraced(function* (
+    topLevelThreadId: ThreadId,
+    doneKeys: ReturnType<typeof makeDeliveryState>["doneKeys"],
+  ) {
+    let pending: (SubagentRequestAwareness & { createdAt: DateTime.Utc }) | null = null;
     for (const [childId, entry] of subagentRequests) {
       if (entry.topLevelThreadId !== topLevelThreadId) continue;
       const child = yield* readThread(childId);
-      const requestId = waitingRequestId(child);
-      if (child === null || requestId === undefined) {
+      const request = waitingRequest(child);
+      if (child === null || request === undefined) {
         subagentRequests.delete(childId);
         continue;
       }
+      const requestId = request.id;
       if (requestId !== entry.requestId) subagentRequests.set(childId, { ...entry, requestId });
-      if (doneKeys.get(topLevelThreadId)?.has(`wait:${requestId}`)) continue;
       if (
-        !config.events.has(
-          child.pendingRuntimeRequest?.kind === "user_input" ? "input" : "approval",
-        )
+        doneKeys.get(topLevelThreadId)?.has(`wait:${requestId}`) ||
+        deliveredAlerts.doneKeys.get(topLevelThreadId)?.has(`wait:${requestId}`)
       )
         continue;
+      if (!config.events.has(request.kind === "user_input" ? "input" : "approval")) continue;
       if (pending === null || DateTime.isGreaterThan(child.updatedAt, pending.updatedAt)) {
         pending = {
           requestId,
           updatedAt: child.updatedAt,
-          waitsForInput: child.pendingRuntimeRequest?.kind === "user_input",
+          createdAt: request.createdAt,
+          waitsForInput: request.kind === "user_input",
         };
       }
     }
@@ -221,7 +254,11 @@ export const make = Effect.gen(function* () {
     Effect.forkIn(Effect.sleep(delayMs).pipe(Effect.andThen(enqueue(threadId))), scope).pipe(
       Effect.asVoid,
     );
-  const markDone = (threadId: ThreadId, key: string) => {
+  const markDone = (
+    { doneKeys, retries }: ReturnType<typeof makeDeliveryState>,
+    threadId: ThreadId,
+    key: string,
+  ) => {
     const keys = doneKeys.get(threadId) ?? new Set<string>();
     keys.add(key);
     // ponytail: keep 32 recent keys plus every still-pending child wait.
@@ -254,16 +291,37 @@ export const make = Effect.gen(function* () {
           ? Option.none()
           : yield* projects.getById(thread.projectId);
       if (thread === null || Option.isNone(project)) {
-        doneKeys.delete(threadId);
+        for (const { doneKeys, retries } of [
+          topicDelivery,
+          deliveredAlerts,
+          ...nativeDeliveries.values(),
+        ]) {
+          doneKeys.delete(threadId);
+          retries.delete(threadId);
+        }
         holds.delete(threadId);
-        retries.delete(threadId);
         snoozes.delete(threadId);
         for (const [childId, entry] of subagentRequests) {
           if (entry.topLevelThreadId === threadId) subagentRequests.delete(childId);
         }
         return;
       }
-      const pending = yield* currentSubagentRequestFor(threadId);
+      const registration = yield* readRegistration;
+      if (registration === "invalid") return;
+      let delivery = topicDelivery;
+      if (registration !== "absent") {
+        const previous = nativeDeliveries.get(registration.deliveryKey);
+        delivery = previous ?? makeDeliveryState();
+        nativeDeliveries.delete(registration.deliveryKey);
+        nativeDeliveries.set(registration.deliveryKey, delivery);
+        // Keep the previous destination's dedupe state for a candidate rollback.
+        if (nativeDeliveries.size > 2) {
+          const oldest = nativeDeliveries.keys().next();
+          if (!oldest.done) nativeDeliveries.delete(oldest.value);
+        }
+      }
+      const { doneKeys, retries } = delivery;
+      const pending = yield* currentSubagentRequestFor(threadId, doneKeys);
       if (
         pending !== null &&
         thread.pendingRuntimeRequest !== null &&
@@ -290,7 +348,7 @@ export const make = Effect.gen(function* () {
         thread.latestRunId !== null &&
         snoozedCompletion({ ...thread, ...snoozes.get(threadId) }, state)
       ) {
-        markDone(threadId, `completed:${thread.latestRunId}`);
+        markDone(delivery, threadId, `completed:${thread.latestRunId}`);
         return;
       }
       if (decision === null || state === null) {
@@ -298,7 +356,10 @@ export const make = Effect.gen(function* () {
         retries.delete(threadId);
         return;
       }
-      if (doneKeys.get(threadId)?.has(decision.key)) {
+      if (
+        doneKeys.get(threadId)?.has(decision.key) ||
+        deliveredAlerts.doneKeys.get(threadId)?.has(decision.key)
+      ) {
         holds.delete(threadId);
         return;
       }
@@ -323,35 +384,95 @@ export const make = Effect.gen(function* () {
         ? `Subagent ${HEADLINES[decision.kind].toLowerCase()}`
         : HEADLINES[decision.kind];
       // ponytail: sequential sends can delay other threads by 10s; add per-thread sends only if observed.
-      const status = yield* HttpClientRequest.post(config.url).pipe(
-        HttpClientRequest.bearerToken(config.token),
-        HttpClientRequest.bodyJson({
-          topic: config.topic,
-          title: thread.title || "T3 Code",
-          message: `${headline} · ${project.value.title}`,
-          priority: decision.kind === "completed" ? 3 : 4,
-          tags: ["t3code", decision.kind],
-          click: `t3code://${state.deepLink.slice(1)}`,
-        }),
-        Effect.flatMap(HttpClient.withScope(client).execute),
-        Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
-        Effect.map((response) => response.status),
-        Effect.scoped,
-        Effect.timeout("10 seconds"),
-        Effect.catch((error) =>
-          Effect.logWarning("ntfy publish failed", { errorTag: error._tag }).pipe(Effect.as(0)),
-        ),
-      );
+      const title = thread.title || "T3 Code";
+      const message = `${headline} · ${project.value.title}`;
+      let status: number;
+      const currentRegistration = yield* readRegistration;
+      if (registration === "absent") {
+        if (currentRegistration !== "absent") {
+          yield* Effect.logWarning("ntfy enrollment changed before send; alert deferred");
+          yield* wakeAfter(threadId, 1_000);
+          return;
+        }
+        status = yield* HttpClientRequest.post(config.url).pipe(
+          HttpClientRequest.bearerToken(config.token),
+          HttpClientRequest.bodyJson({
+            topic: config.topic,
+            title,
+            message,
+            priority: decision.kind === "completed" ? 3 : 4,
+            tags: ["t3code", decision.kind],
+            click: `t3code://${state.deepLink.slice(1)}`,
+          }),
+          Effect.flatMap(HttpClient.withScope(client).execute),
+          Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+          Effect.map((response) => response.status),
+          Effect.scoped,
+          Effect.timeout("10 seconds"),
+          Effect.catch((error) =>
+            Effect.logWarning("ntfy publish failed", { errorTag: error._tag }).pipe(Effect.as(0)),
+          ),
+        );
+      } else {
+        if (
+          typeof currentRegistration === "string" ||
+          currentRegistration.deliveryKey !== registration.deliveryKey
+        ) {
+          yield* Effect.logWarning("ntfy enrollment changed before send; alert deferred");
+          yield* wakeAfter(threadId, 1_000);
+          return;
+        }
+        const occurredAt =
+          decision.kind === "completed" || decision.kind === "failed"
+            ? thread.latestRunCompletedAt
+            : childWait
+              ? pending.createdAt
+              : thread.pendingRuntimeRequest?.createdAt;
+        if (occurredAt == null) return;
+        const updatedAt = DateTime.toEpochMillis(occurredAt);
+        const ageMs = (yield* DateTime.now).epochMilliseconds - updatedAt;
+        if (ageMs < 0 || ageMs >= MAX_NATIVE_ALERT_AGE_MS) {
+          markDone(delivery, threadId, decision.key);
+          if (childWait) yield* enqueue(threadId);
+          return;
+        }
+        status = yield* makeUnifiedPushRequest({
+          registration: currentRegistration,
+          token: config.token,
+          decisionKey: decision.key,
+          updatedAt,
+          deepLink: state.deepLink,
+          title,
+          message,
+          ttlSeconds: Math.ceil((MAX_NATIVE_ALERT_AGE_MS - ageMs) / 1_000),
+        }).pipe(
+          Effect.flatMap((request) =>
+            HttpClient.withScope(client)
+              .execute(request)
+              .pipe(
+                Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+                Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+                Effect.map((response) => response.status),
+                Effect.scoped,
+                Effect.timeout(Math.min(10_000, MAX_NATIVE_ALERT_AGE_MS - ageMs)),
+                Effect.orElseSucceed(() => 0),
+              ),
+          ),
+          Effect.orElseSucceed(() => 400),
+        );
+      }
+      const logContext = registration === "absent" ? { threadId } : { destination: "native" };
       if (status >= 200 && status < 300) {
-        markDone(threadId, decision.key);
+        markDone(delivery, threadId, decision.key);
+        markDone(deliveredAlerts, threadId, decision.key);
       } else if (status === 0 || status === 429 || status >= 500) {
         const attempt = retry?.attempt ?? 0;
         const delayMs = RETRY_DELAYS_MS[attempt];
         if (delayMs === undefined) {
-          yield* Effect.logWarning("ntfy publish retry budget exhausted", { threadId });
-          markDone(threadId, decision.key);
+          yield* Effect.logWarning("ntfy publish retry budget exhausted", logContext);
+          markDone(delivery, threadId, decision.key);
         } else {
-          yield* Effect.logWarning("ntfy publish retry scheduled", { status, threadId });
+          yield* Effect.logWarning("ntfy publish retry scheduled", { status, ...logContext });
           retries.set(threadId, {
             key: decision.key,
             attempt: attempt + 1,
@@ -360,8 +481,8 @@ export const make = Effect.gen(function* () {
           yield* wakeAfter(threadId, delayMs);
         }
       } else {
-        yield* Effect.logError("ntfy publish rejected", { status, threadId });
-        markDone(threadId, decision.key);
+        yield* Effect.logError("ntfy publish rejected", { status, ...logContext });
+        markDone(delivery, threadId, decision.key);
       }
       if (childWait && doneKeys.get(threadId)?.has(decision.key)) yield* enqueue(threadId);
     },
