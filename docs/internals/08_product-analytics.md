@@ -1,6 +1,6 @@
 # Product analytics
 
-The server owns analytics delivery, opt-out, and identity for every connected client. Clients never
+The server owns analytics delivery, consent, and identity for every connected client. Clients never
 load the PostHog browser SDK, PostHog person profiles stay disabled, and visiting hosted web without
 an authenticated connection does not count as product use.
 
@@ -38,5 +38,9 @@ an authenticated connection does not count as product use.
 - Delivery ([`AnalyticsService.ts`](../../apps/server/src/telemetry/AnalyticsService.ts)) attaches a
   UUID per event, backs off on failure, and drops batches after bounded retries so a stuck batch
   cannot loop forever.
+- Product events and relay tracing are off by default. Server and desktop opt in with
+  `T3CODE_TELEMETRY_ENABLED=true`; browser and mobile builds use `VITE_T3CODE_TELEMETRY_ENABLED=true`
+  and `EXPO_PUBLIC_T3CODE_TELEMETRY_ENABLED=true` respectively. Mobile crash reports require the
+  user's in-app opt-in.
 - Dev-runner servers and CI smoke tests disable telemetry (and relay tracing) by default so they do
   not inflate install counts; set `T3CODE_TELEMETRY_ENABLED=true` to test locally.

@@ -25,27 +25,27 @@ if (!__DEV__) {
 
 let latestConfiguration = 0;
 
-// While sending is off, a dispatch pass drops what it finds, so one runs before turning it back on.
+// Apply consent before dispatch: enabling sends queued reports; disabling drops them without sending.
 // Best effort: Observe skips the pass while it is backing off from a failed send.
 export async function setCrashReportsEnabled(enabled: boolean) {
-  const configuration = ++latestConfiguration;
+  ++latestConfiguration;
   const dispatchingEnabled = crashReportingAvailable && enabled;
-  if (dispatchingEnabled) {
-    await Observe.dispatchEvents();
-    if (configuration !== latestConfiguration) return;
-  }
   Observe.configure({
     dispatchingEnabled,
     ...(typeof appVariant === "string" ? { environment: appVariant } : {}),
   });
+  await Observe.dispatchEvents();
 }
 
 if (!crashReportingAvailable) {
   void setCrashReportsEnabled(false);
 } else {
-  // Observe keeps its last configuration across launches; configuring it off while the setting
-  // loads would drop the last session's native crash. Imported lazily so the persistence graph
-  // never runs ahead of the imports `index.ts` orders first.
+  // Upgrades can carry a native dispatchingEnabled=true from before consent was required.
+  // Turn it off before reading preferences without counting this as a user configuration change.
+  Observe.configure({
+    dispatchingEnabled: false,
+    ...(typeof appVariant === "string" ? { environment: appVariant } : {}),
+  });
   const changedSinceLoad = () => latestConfiguration !== 0;
   void import("../../persistence/imperative")
     .then(({ loadPreferences }) => loadPreferences())
@@ -53,8 +53,8 @@ if (!crashReportingAvailable) {
       (preferences) =>
         changedSinceLoad()
           ? undefined
-          : setCrashReportsEnabled(preferences.crashReportsEnabled !== false),
-      // Observe keeps the last choice it was given, which stands in for the unreadable one.
+          : setCrashReportsEnabled(preferences.crashReportsEnabled === true),
+      // Keep the native off state when the stored preference cannot be read.
       (error: unknown) => console.warn("[observe] could not read the crash report setting", error),
     )
     .catch((error: unknown) => {

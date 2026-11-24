@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { resolveCloudPublicConfig } from "./publicConfig";
+import { hasTracingPublicConfig, resolveCloudPublicConfig } from "./publicConfig";
 
 vi.mock("expo-constants", () => ({
   default: {
@@ -26,10 +26,28 @@ describe("resolveCloudPublicConfig", () => {
         url: null,
       },
       observability: {
+        enabled: false,
         tracesUrl: null,
         tracesDataset: null,
         tracesToken: null,
       },
     });
+  });
+
+  it("requires explicit opt-in even when tracing credentials are configured", () => {
+    const config = resolveCloudPublicConfig({
+      observability: {
+        tracesUrl: "https://api.axiom.test/v1/traces",
+        tracesDataset: "mobile-traces",
+        tracesToken: "public-ingest-token",
+      },
+    });
+    expect(hasTracingPublicConfig(config)).toBe(false);
+    expect(
+      hasTracingPublicConfig({
+        ...config,
+        observability: { ...config.observability, enabled: true },
+      }),
+    ).toBe(true);
   });
 });
