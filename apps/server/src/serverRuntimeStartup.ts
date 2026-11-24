@@ -36,6 +36,7 @@ import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
+import * as HermesRestartRecovery from "./orchestration-v2/HermesRestartRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
@@ -438,12 +439,14 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
   >(input: {
     readonly importLegacyShells: Effect.Effect<Import, ImportError, ImportContext>;
     readonly recover: Effect.Effect<Recovery, RecoveryError, RecoveryContext>;
+    readonly recoverHermes: Effect.Effect<void>;
     readonly recoverDelegatedTasks: Effect.Effect<void, DelegationError, DelegationContext>;
     readonly startEffectWorker: Effect.Effect<void, WorkerError, WorkerContext>;
     readonly autoBootstrap: Effect.Effect<Bootstrap, BootstrapError, BootstrapContext>;
   }) {
     yield* input.importLegacyShells;
     const recovery = yield* input.recover;
+    yield* input.recoverHermes;
     yield* input.recoverDelegatedTasks;
     yield* input.startEffectWorker;
     const bootstrap = yield* input.autoBootstrap;
@@ -456,6 +459,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   const keybindings = yield* Keybindings.Keybindings;
   const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+  const hermesRestartRecovery = yield* HermesRestartRecovery.HermesRestartRecoveryService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
@@ -554,6 +558,10 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         ),
       ),
       recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
+      recoverHermes: runStartupPhase(
+        "orchestration-v2.hermes-restart-recovery",
+        hermesRestartRecovery.recover,
+      ),
       recoverDelegatedTasks: runStartupPhase(
         "orchestration-v2.delegated-tasks.recover",
         orchestrator.recoverDelegatedTasks,

@@ -46,6 +46,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
+import * as HermesRestartRecoveryService from "./HermesRestartRecoveryService.ts";
 import * as ProviderSwitchService from "./ProviderSwitchService.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
@@ -400,6 +401,16 @@ const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.laye
     ),
   ),
 );
+const layerHermesRestartRecoveryProvided = HermesRestartRecoveryService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerProviderSessionManagerProvided,
+      layerRunExecutionServiceProvided,
+      ProjectionStore.layer,
+      layerRuntimePolicyProvided,
+    ),
+  ),
+);
 
 const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
   Layer.provide(
@@ -426,6 +437,7 @@ export const layer = Layer.mergeAll(
   layerProviderSessionManagerProvided,
   layerProviderAuthServiceProvided,
   layerProviderRuntimeRecoveryProvided,
+  layerHermesRestartRecoveryProvided,
   layerProjectionMaintenanceProvided,
   layerLegacyV1ThreadImporterProvided,
 );

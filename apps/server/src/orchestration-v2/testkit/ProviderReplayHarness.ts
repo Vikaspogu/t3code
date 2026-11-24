@@ -52,6 +52,7 @@ import * as ProviderEventIngestor from "../ProviderEventIngestor.ts";
 import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
 import * as ProviderRuntimeRecoveryService from "../ProviderRuntimeRecoveryService.ts";
+import * as HermesRestartRecoveryService from "../HermesRestartRecoveryService.ts";
 import * as ProviderSessionManager from "../ProviderSessionManager.ts";
 import * as CommandOutputRecorder from "./CommandOutputRecorder.ts";
 import * as ProviderSwitchService from "../ProviderSwitchService.ts";
@@ -268,7 +269,8 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
   | EffectWorker.OrchestrationEffectWorkerV2
   | EventSink.EventSinkV2
   | CommandOutputRecorder.CommandOutputRecorder
-  | ProviderSessionManager.ProviderSessionManagerV2,
+  | ProviderSessionManager.ProviderSessionManagerV2
+  | ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService,
   Error | MigrationError | PlatformError.PlatformError | SqlError
 > {
   const layerRegistry = harness.makeProviderAdapterRegistryLayer(
@@ -310,6 +312,7 @@ export function layerWithRegistry<Error>(
   | EffectWorker.OrchestrationEffectWorkerV2
   | EventSink.EventSinkV2
   | ProviderSessionManager.ProviderSessionManagerV2
+  | ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService
   | CommandOutputRecorder.CommandOutputRecorder
   | ThreadCommandExecutor.ThreadCommandExecutor,
   Error | MigrationError | PlatformError.PlatformError | SqlError
@@ -407,6 +410,27 @@ export function layerWithRegistry<Error>(
       ),
     ),
   );
+  const layerCommandOutputHubProvided = CommandOutputRecorder.layer.pipe(
+    Layer.provide(Layer.merge(layerEventSinkProvided, layerStores)),
+  );
+  const layerProviderSessionManagerProvided = ProviderSessionManager.layerWithOptions({
+    configureMcp: false,
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerCommandOutputHubProvided,
+        layerProvidedRegistry,
+        layerEventSinkProvided,
+        IdAllocator.layer,
+        McpProviderSessions.layer,
+        McpSessionRegistryTestkit.layer,
+        layerProviderEventIngestorProvided,
+        layerStores,
+        layerServerSettings,
+        ProviderInstallationGate.layer,
+      ),
+    ),
+  );
   const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(
     Layer.provide(VcsProcess.layer),
     Layer.provide(layerServerConfig),
@@ -437,26 +461,6 @@ export function layerWithRegistry<Error>(
     layerCommandReceiptStoreProvided,
     IdAllocator.layer,
     layerProviderEventIngestorProvided,
-  );
-  const layerCommandOutputHubProvided = CommandOutputRecorder.layer.pipe(
-    Layer.provide(Layer.merge(layerEventSinkProvided, layerStores)),
-  );
-  const layerProviderSessionManagerProvided = ProviderSessionManager.layerWithOptions({
-    configureMcp: false,
-  }).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerCommandOutputHubProvided,
-        layerProvidedRegistry,
-        layerEventSinkProvided,
-        IdAllocator.layer,
-        McpProviderSessions.layer,
-        McpSessionRegistryTestkit.layer,
-        layerProviderEventIngestorProvided,
-        layerStores,
-        ProviderInstallationGate.layer,
-      ),
-    ),
   );
   const layerProviderSwitchServiceProvided = ProviderSwitchService.layer.pipe(
     Layer.provide(layerProvidedRegistry),
@@ -622,31 +626,36 @@ export function layerWithRegistry<Error>(
     Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
-  if (options.runEffectWorker === false) {
-    return layerReplayRuntime;
-  }
   // Build recovery before runtime so it commits before the effect worker claims work.
-  const layerStartupRecovery: Layer.Layer<
-    never,
-    MigrationError | PlatformError.PlatformError | SqlError
-  > =
-    options.recoverOnStartup === true
-      ? Layer.effectDiscard(
-          ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService.use(
-            (recovery) => recovery.recover,
-          ).pipe(Effect.orDie),
-        ).pipe(
-          Layer.provide(ProviderRuntimeRecoveryService.layer),
-          Layer.provide(
-            Layer.mergeAll(
-              layerStores,
-              layerEventSinkProvided,
-              IdAllocator.layer,
-              layerServerSettings,
-            ),
-          ),
-        )
-      : Layer.empty;
+  const layerStartupRecovery = Layer.mergeAll(
+    ProviderRuntimeRecoveryService.layer,
+    HermesRestartRecoveryService.layer,
+  ).pipe(
+    Layer.tap((context) =>
+      options.runEffectWorker !== false && options.recoverOnStartup === true
+        ? Effect.gen(function* () {
+            const recovery = yield* ProviderRuntimeRecoveryService.ProviderRuntimeRecoveryService;
+            const hermes = yield* HermesRestartRecoveryService.HermesRestartRecoveryService;
+            yield* recovery.recover;
+            yield* hermes.recover;
+          }).pipe(Effect.provide(context), Effect.orDie)
+        : Effect.void,
+    ),
+    Layer.provide(
+      Layer.mergeAll(
+        layerStores,
+        layerEventSinkProvided,
+        IdAllocator.layer,
+        layerServerSettings,
+        layerProviderSessionManagerProvided,
+        layerRunExecutionServiceProvided,
+        layerRuntime,
+      ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+    ),
+  );
+  if (options.runEffectWorker === false) {
+    return layerReplayRuntime.pipe(Layer.provideMerge(layerStartupRecovery));
+  }
   return Layer.effect(
     Orchestrator.OrchestratorV2,
     Effect.gen(function* () {
@@ -655,5 +664,5 @@ export function layerWithRegistry<Error>(
       yield* EffectWorker.runDaemon.pipe(Effect.forkScoped);
       return orchestrator;
     }),
-  ).pipe(Layer.provideMerge(layerReplayRuntime), Layer.provide(layerStartupRecovery));
+  ).pipe(Layer.provideMerge(layerReplayRuntime), Layer.provideMerge(layerStartupRecovery));
 }

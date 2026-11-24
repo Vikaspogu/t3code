@@ -2071,6 +2071,17 @@ it.effect("queues a steer until the turn ends when the provider cannot steer it"
       assert.equal(held.runs.find((run) => run.id === first.runId)?.status, "running");
       const queued = held.runs.find((run) => run.userMessageId === messageId);
       assert.equal(queued?.status, "queued");
+      if (!queued) throw new Error("Expected a queued follow-up");
+      yield* orchestrator.dispatch({
+        type: "queued-run.edit",
+        commandId: CommandId.make("edit-follow-up"),
+        threadId,
+        runId: queued.id,
+        text: "edited follow up",
+      });
+      yield* worker.drain();
+      assert.equal(started.length, 1);
+      assert.deepEqual(steered, []);
 
       const settled = yield* orchestrator.streamDomainEvents.pipe(
         Stream.filter(
@@ -2107,7 +2118,7 @@ it.effect("queues a steer until the turn ends when the provider cannot steer it"
       assert.deepEqual(interrupted, []);
       assert.equal(started.length, 2);
       assert.equal(started[1]?.runId, queued?.id);
-      assert.equal(started[1]?.message.text, "follow up");
+      assert.equal(started[1]?.message.text, "edited follow up");
     }).pipe(Effect.provide(layer));
   }),
 );

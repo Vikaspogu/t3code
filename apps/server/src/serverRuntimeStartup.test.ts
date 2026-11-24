@@ -35,6 +35,7 @@ import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1Threa
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
+import * as HermesRestartRecovery from "./orchestration-v2/HermesRestartRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
@@ -60,6 +61,7 @@ it.effect.each([
       scenario === "disabled-default" ? "custom" : "codex",
     );
     const events: ServerLifecycleStreamEvent[] = [];
+    const startupOrder: string[] = [];
     const recovery = {
       terminalizedRuns: 0,
       stoppedSessions: 0,
@@ -111,13 +113,30 @@ it.effect.each([
         importPendingTranscripts: Effect.succeed(imports),
       }),
       Layer.mock(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)({
-        recover: Effect.succeed(recovery),
+        recover: Effect.sync(() => {
+          startupOrder.push("generic");
+          return recovery;
+        }),
         prepareForShutdown: Effect.void,
         reconcile: () => Effect.succeed(recovery),
       }),
-      Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
+      Layer.mock(HermesRestartRecovery.HermesRestartRecoveryService)({
+        recover: Effect.sync(() => {
+          startupOrder.push("hermes");
+        }),
+      }),
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        recoverDelegatedTasks: Effect.sync(() => {
+          startupOrder.push("delegated");
+        }),
+      }),
       Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown: Effect.void }),
-      Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ start: () => Effect.void }),
+      Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({
+        start: () =>
+          Effect.sync(() => {
+            startupOrder.push("relay");
+          }),
+      }),
       Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: () => Effect.never }),
       Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
         publish: (event) =>
@@ -223,6 +242,7 @@ it.effect.each([
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       yield* startup.markHttpListening;
       const ready = yield* Effect.exit(startup.awaitCommandReady);
+      assert.deepEqual(startupOrder, ["generic", "hermes", "delegated", "relay"]);
       assert.equal(Exit.isSuccess(ready), scenario !== "project-failure");
       const welcome = events.find((event) => event.type === "welcome");
       if (scenario === "project-failure") {
