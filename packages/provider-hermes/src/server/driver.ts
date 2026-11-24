@@ -37,7 +37,7 @@ const textGeneration: ProviderTextGeneration = {
 
 export const HermesDriver: ProviderDriver<HermesSettingsValue, ProviderHost.ProviderHost> = {
   driverKind: HERMES_PROVIDER,
-  metadata: { displayName: "Hermes", supportsMultipleInstances: true },
+  metadata: { displayName: "Hermes", supportsMultipleInstances: true, hasDefaultInstance: false },
   configSchema: HermesSettings,
   defaultConfig: () => decodeSettings({}),
   create: Effect.fn("HermesDriver.create")(function* (input) {
