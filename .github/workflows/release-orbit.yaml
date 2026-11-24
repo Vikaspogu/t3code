@@ -316,7 +316,7 @@ jobs:
     if: github.server_url == 'https://github.com'
     needs:
       - release
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 90
     permissions:
       contents: write
