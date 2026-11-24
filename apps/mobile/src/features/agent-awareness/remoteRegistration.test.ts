@@ -41,6 +41,8 @@ import {
   getAgentAwarenessRegistrationStatus,
   refreshActiveLiveActivityRemoteRegistration,
   refreshAgentAwarenessRegistration,
+  resumeCloudAgentAwarenessRegistration,
+  selectSelfHostedAgentNotifications,
   registerLiveActivityPushToken,
   releaseAgentAwarenessRelayTokenProvider,
   setAgentAwarenessRelayTokenProvider,
@@ -51,12 +53,19 @@ import {
 } from "./remoteRegistration";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
-import { configureAndroidAgentNotifications } from "./androidNotifications";
+import {
+  clearAndroidAgentNotifications,
+  configureAndroidAgentNotifications,
+  getSelfHostedPushStatus,
+  supportsSelfHostedPush,
+} from "./androidNotifications";
 
 vi.mock("./androidNotifications", () => ({
   supportsAndroidAgentNotifications: vi.fn(() => true),
   configureAndroidAgentNotifications: vi.fn(),
   clearAndroidAgentNotifications: vi.fn(),
+  getSelfHostedPushStatus: vi.fn(() => null),
+  supportsSelfHostedPush: vi.fn(() => false),
 }));
 
 const secureStore = vi.hoisted(() => new Map<string, string>());
@@ -158,6 +167,10 @@ vi.mock("expo", async () => {
 });
 
 vi.mock("expo-secure-store", () => ({
+  getItem: (key: string) => secureStore.get(key) ?? null,
+  setItem: (key: string, value: string) => {
+    secureStore.set(key, value);
+  },
   getItemAsync: (key: string) => Promise.resolve(secureStore.get(key) ?? null),
   setItemAsync: (key: string, value: string) => {
     secureStore.set(key, value);
@@ -306,6 +319,7 @@ const runBackgroundOperations = Effect.fn("TestRemoteRegistration.runBackgroundO
 
 describe("makeRelayDeviceRegistrationRequest", () => {
   beforeEach(() => {
+    secureStore.clear();
     vi.restoreAllMocks();
     vi.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue({
       type: "ios",
@@ -322,6 +336,8 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     backgroundRuntime.pending.length = 0;
     Constants.expoConfig!.extra = {};
     __resetAgentAwarenessRemoteRegistrationForTest();
+    vi.mocked(getSelfHostedPushStatus).mockReturnValue(null);
+    vi.mocked(supportsSelfHostedPush).mockReturnValue(false);
     appStateMock.listeners.length = 0;
     registrationRecordStore.current = null;
     vi.mocked(saveAgentAwarenessRegistrationRecord).mockClear();
@@ -808,6 +824,76 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     return registrations;
   };
 
+  it.effect("blocks an in-flight cloud result and sign-out while self-hosted is selected", () => {
+    const registrations = stubAndroidDeviceRelay();
+    vi.mocked(supportsSelfHostedPush).mockReturnValue(true);
+    vi.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue({
+      type: "android",
+      data: "fcm-token",
+    });
+    setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"), "user-a");
+    const fetchRelay = globalThis.fetch;
+    let notifyRequest = () => {};
+    let releaseRequest = () => {};
+    const requestStarted = new Promise<void>((resolve) => {
+      notifyRequest = resolve;
+    });
+    const waitForRelease = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetchRelay(input, init);
+      if (
+        new Request(input, init).url.endsWith("/v1/mobile/devices") &&
+        registrations.length === 1
+      ) {
+        notifyRequest();
+        await waitForRelease;
+      }
+      return response;
+    });
+    const binding = {
+      environmentId: "environment-1",
+      ntfyOrigin: "https://ntfy.example.test",
+      enabled: true,
+      state: "registering" as const,
+      lastReceivedAt: 0,
+      error: null,
+    };
+    const status = { installationId: "installation-1", environments: [binding] };
+
+    return Effect.gen(function* () {
+      const cloudRequest = yield* Effect.forkChild(refreshAgentAwarenessRegistration());
+      yield* Effect.promise(() => requestStarted);
+      vi.mocked(getSelfHostedPushStatus).mockReturnValue(status);
+      selectSelfHostedAgentNotifications();
+      releaseRequest();
+      yield* Fiber.join(cloudRequest);
+      const readCloudToken = vi.mocked(Notifications.getDevicePushTokenAsync);
+      readCloudToken.mockClear();
+      vi.mocked(clearAndroidAgentNotifications).mockClear();
+      yield* refreshAgentAwarenessRegistration();
+      setAgentAwarenessRelayTokenProvider(null);
+      expect(vi.mocked(clearAndroidAgentNotifications)).not.toHaveBeenCalled();
+      expect(readCloudToken).not.toHaveBeenCalled();
+      expect(agentAwarenessNotificationsReady()).toBe(false);
+      expect(registrationRecordStore.current).toBeNull();
+
+      vi.mocked(getSelfHostedPushStatus).mockReturnValue({ ...status, environments: [] });
+      yield* refreshAgentAwarenessRegistration();
+      expect(agentAwarenessNotificationsReady()).toBe(false);
+      __resetAgentAwarenessRemoteRegistrationForTest();
+      setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"), "user-a");
+      yield* refreshAgentAwarenessRegistration();
+      expect(registrations).toHaveLength(1);
+      expect(readCloudToken).not.toHaveBeenCalled();
+      expect(agentAwarenessNotificationsReady()).toBe(false);
+      resumeCloudAgentAwarenessRegistration();
+      yield* refreshAgentAwarenessRegistration();
+      expect(registrations).toHaveLength(2);
+      expect(agentAwarenessNotificationsReady()).toBe(true);
+    }).pipe(Effect.provideService(FetchHttpClient.Fetch, fetch), Effect.provide(layerRelayTest));
+  });
   it.effect("does not report notifications ready when its push token lookup fails", () => {
     const registrations = stubAndroidDeviceRelay();
     vi.mocked(Notifications.getDevicePushTokenAsync).mockRejectedValue(
