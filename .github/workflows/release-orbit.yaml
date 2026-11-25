@@ -364,8 +364,8 @@ jobs:
           [[ ${#baseline[@]} == 1 && -f "${baseline[0]}" ]] || { echo "Expected one prior Orbit APK" >&2; exit 1; }
           candidate="$GITHUB_WORKSPACE/release-android/t3-${VERSION}-android-arm64.apk"
           build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          baseline_cert="$("$build_tools/apksigner" verify --print-certs "${baseline[0]}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'A-F' 'a-f')"
-          candidate_cert="$("$build_tools/apksigner" verify --print-certs "$candidate" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'A-F' 'a-f')"
+          baseline_cert="$("$build_tools/apksigner" verify --print-certs "${baseline[0]}" | sed -nE 's/^(Signer #1|V3\.0 Signer:) certificate SHA-256 digest: //p' | tr 'A-F' 'a-f')"
+          candidate_cert="$("$build_tools/apksigner" verify --print-certs "$candidate" | sed -nE 's/^(Signer #1|V3\.0 Signer:) certificate SHA-256 digest: //p' | tr 'A-F' 'a-f')"
           [[ "$baseline_cert" =~ ^[a-f0-9]{64}$ && "$candidate_cert" == "$baseline_cert" ]] || { echo "APK signing certificate does not match prior Orbit" >&2; exit 1; }
           baseline_badging="$("$build_tools/aapt" dump badging "${baseline[0]}")"
           candidate_badging="$("$build_tools/aapt" dump badging "$candidate")"
