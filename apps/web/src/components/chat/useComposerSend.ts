@@ -25,6 +25,8 @@ import {
   DEFAULT_MODEL,
   type EnvironmentId,
   type ModelSelection,
+  type ProviderDriverKind,
+  type ProviderInstanceId,
   type PreviewAnnotationPayload,
   type ResponseContextRecord,
   type ScopedThreadRef,
@@ -200,6 +202,11 @@ type TimelineFollow = ReturnType<typeof useTimelineFollow>;
 
 interface ComposerSendInput {
   readonly environmentId: EnvironmentId;
+  readonly readProviderSendBlockReason: (
+    instanceId: ProviderInstanceId,
+    driver: ProviderDriverKind,
+    target?: "fanout",
+  ) => string | null;
   readonly routeThreadKey: string;
   readonly currentRouteThreadKeyRef: { readonly current: string | null };
   readonly draftId: DraftId | null;
@@ -313,6 +320,7 @@ export function useComposerSend(input: ComposerSendInput) {
     activeProject,
     activeProjectIsScratch,
     activeProjectDefaultModelSelection,
+    readProviderSendBlockReason,
     activeMessageCount,
     isServerThread,
     isLocalDraftThread,
@@ -616,6 +624,17 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return true;
     };
+    if (sendCtx && (!answeringQuestion || startsSideChat)) {
+      const reason = readProviderSendBlockReason(
+        sendCtx.selectedModelSelection.instanceId,
+        sendCtx.selectedProvider,
+      );
+      if (reason !== null) {
+        if (directAnnotation) notifyDirectAnnotationAttached();
+        else setThreadError(activeThread.id, reason);
+        return;
+      }
+    }
     if (onSideChat && sendCtx && sideChatCommand && sideChatDisabledReason === null) {
       const replyTo =
         useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
@@ -683,6 +702,11 @@ export function useComposerSend(input: ComposerSendInput) {
           usesAttachmentUploads: capabilities.supportsAttachmentUploads,
           draftTarget: composerDraftTarget,
         });
+        const providerBlockReason = readProviderSendBlockReason(
+          sendCtx.selectedModelSelection.instanceId,
+          sendCtx.selectedProvider,
+        );
+        if (providerBlockReason !== null) throw new Error(providerBlockReason);
         // `onSideChat` forks the thread on screen, which may have changed during the upload.
         if (currentRouteThreadKeyRef.current !== routeThreadKey) return false;
         const attachmentIds = boundAttachmentIds(attachments, snapshot.attachments);
@@ -1209,6 +1233,14 @@ export function useComposerSend(input: ComposerSendInput) {
             sendCtx?.shownPendingApprovalIds.includes(approval.requestId),
           )
         : [];
+    const blockedApprovalReason = approvalsToDecline.find(
+      (approval) => approval.responseBlockedReason,
+    )?.responseBlockedReason;
+    if (blockedApprovalReason) {
+      sendInFlightRef.current = false;
+      setThreadError(threadIdForSend, blockedApprovalReason);
+      return;
+    }
     if (approvalsToDecline.length > 0 || approvalFeedbackTarget !== undefined) {
       // A draft edited since send, or a paste still landing in it, is no longer the message
       // the user sent.
@@ -1366,6 +1398,8 @@ export function useComposerSend(input: ComposerSendInput) {
         attachmentsPromise: turnAttachmentsPromise,
         usesAttachmentUploads: turnUsesAttachmentUploads,
         readFileBlockReason: () => readLiveAttachmentCapabilities().fileBlockReason,
+        readTargetBlockReason: (target) =>
+          readProviderSendBlockReason(target.selection.instanceId, target.driver, "fanout"),
         buildOutgoingMessageContext,
         isCurrentSend: () => composerSendGenerationRef.current === sendGeneration,
         draftChangedDuringPreparation,
@@ -1462,6 +1496,11 @@ export function useComposerSend(input: ComposerSendInput) {
 
     const turnAttachmentsResult = await settlePromise(async () => {
       const turnAttachments = await turnAttachmentsPromise;
+      const providerBlockReason = readProviderSendBlockReason(
+        ctxSelectedModelSelection.instanceId,
+        ctxSelectedProvider,
+      );
+      if (providerBlockReason !== null) throw new Error(providerBlockReason);
       const liveFileBlockReason = readLiveAttachmentCapabilities().fileBlockReason;
       if (liveFileBlockReason !== null) {
         throw new Error(liveFileBlockReason);

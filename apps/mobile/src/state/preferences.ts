@@ -122,4 +122,10 @@ const mobilePreferencesRuntime = Atom.runtime(Runtime.layer);
 const mobilePreferencesState = createMobilePreferencesState(mobilePreferencesRuntime);
 
 export const mobilePreferencesAtom = mobilePreferencesState.preferencesAtom;
+export const sidebarPinnedStatusEnabledAtom = Atom.make((get) => {
+  const preferences = get(mobilePreferencesAtom);
+  return (
+    AsyncResult.isSuccess(preferences) && preferences.value.sidebarPinnedStatusEnabled === true
+  );
+});
 export const saveMobilePreferences = mobilePreferencesState.savePreferences;

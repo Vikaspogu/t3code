@@ -276,6 +276,7 @@ export function usePendingThreadRequests(input: {
   readonly environmentId: EnvironmentId;
   readonly activeThreadId: ThreadId | null;
   readonly serverProjection: ThreadStructure | null;
+  readonly getRequestProviderUnavailableReason: (requestId: RuntimeRequestId) => string | null;
   readonly supportsQuestionAttachments: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
   readonly setComposerDraftPrompt: (target: ScopedThreadRef | DraftId, prompt: string) => void;
@@ -287,6 +288,7 @@ export function usePendingThreadRequests(input: {
     environmentId,
     activeThreadId,
     serverProjection,
+    getRequestProviderUnavailableReason,
     supportsQuestionAttachments,
     composerDraftTarget,
     setComposerDraftPrompt,
@@ -294,6 +296,7 @@ export function usePendingThreadRequests(input: {
     composerRef,
     setThreadError,
   } = input;
+  const readRequestProviderBlockReason = useStableCallback(getRequestProviderUnavailableReason);
   const respondToThreadApproval = useOrchestrationCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -328,12 +331,18 @@ export function usePendingThreadRequests(input: {
   const pendingApprovals =
     pendingRequests.approvals.length === 0
       ? NO_PENDING_APPROVALS
-      : derivePendingApprovals(pendingRequests.approvals);
+      : derivePendingApprovals(pendingRequests.approvals).map((approval) => {
+          const responseBlockedReason = getRequestProviderUnavailableReason(approval.requestId);
+          return responseBlockedReason === null ? approval : { ...approval, responseBlockedReason };
+        });
   const pendingUserInputs =
     pendingRequests.userInputs.length === 0
       ? NO_PENDING_USER_INPUTS
       : derivePendingUserInputs(pendingRequests.userInputs);
   const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const pendingUserInputUnavailableReason = activePendingUserInput
+    ? getRequestProviderUnavailableReason(activePendingUserInput.requestId)
+    : null;
   const activePendingRequestKey = userInputDraftKey(
     environmentId,
     activeThreadId,
@@ -363,6 +372,7 @@ export function usePendingThreadRequests(input: {
       "live"
     )
       return;
+    if (readRequestProviderBlockReason(requestId) !== null) return;
 
     setRespondingRequestIds((existing) =>
       existing.includes(requestId) ? existing : [...existing, requestId],
@@ -396,6 +406,7 @@ export function usePendingThreadRequests(input: {
       return;
     const pendingInput = pendingUserInputs.find((input) => input.requestId === requestId);
     if (!pendingInput || pendingInput.responseCapability === "not_resumable") return;
+    if (readRequestProviderBlockReason(requestId) !== null) return;
     const responseKey = JSON.stringify([environmentId, activeThreadId, requestId]);
     if (userInputResponsesInFlight.current.has(responseKey)) return;
     userInputResponsesInFlight.current.add(responseKey);
@@ -470,6 +481,7 @@ export function usePendingThreadRequests(input: {
         );
         return;
       }
+      if (readRequestProviderBlockReason(requestId) !== null) return;
       const result = await respondToThreadUserInput({
         environmentId,
         input: {
@@ -633,7 +645,11 @@ export function usePendingThreadRequests(input: {
   });
 
   const onAdvanceActivePendingUserInput = () => {
-    if (!activePendingUserInput || activePendingUserInput.responseCapability === "not_resumable") {
+    if (
+      !activePendingUserInput ||
+      activePendingUserInput.responseCapability === "not_resumable" ||
+      readRequestProviderBlockReason(activePendingUserInput.requestId) !== null
+    ) {
       return;
     }
     const { activePendingProgress, activePendingResolvedAnswers } =
@@ -666,6 +682,7 @@ export function usePendingThreadRequests(input: {
     pendingUserInputs,
     activePendingApproval,
     activePendingUserInput,
+    pendingUserInputUnavailableReason,
     activePendingIsResponding,
     respondingRequestIds,
     onRespondToApproval: onRespondToApprovalStable,

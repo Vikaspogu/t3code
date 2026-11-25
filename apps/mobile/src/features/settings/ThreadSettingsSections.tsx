@@ -223,6 +223,19 @@ export function WorkingSectionSettings() {
     <View className="gap-3">
       <SettingsSection title={gt("Sidebar")}>
         <SettingsSwitchRow
+          icon="line.3.horizontal.decrease"
+          label={gt("Conversation organization")}
+          subtitle={gt("Group Hermes conversations and filter threads by activity.")}
+          value={
+            AsyncResult.isSuccess(preferences) &&
+            preferences.value.sidebarPinnedStatusEnabled === true
+          }
+          disabled={!AsyncResult.isSuccess(preferences)}
+          onValueChange={(sidebarPinnedStatusEnabled) => {
+            void savePreferences({ sidebarPinnedStatusEnabled });
+          }}
+        />
+        <SettingsSwitchRow
           icon="bolt.circle"
           label={gt("Working section")}
           value={workingShelfEnabled}

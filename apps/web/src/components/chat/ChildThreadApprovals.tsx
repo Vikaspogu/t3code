@@ -9,8 +9,21 @@ import {
 import { T, useGT, useMessages, Var } from "gt-react";
 import { useState } from "react";
 import { useEnvironmentScope } from "../../state/session";
-import { childThreadApprovalsAtom, threadEnvironment } from "../../state/threads";
+import {
+  childThreadApprovalsAtom,
+  environmentThreadDetails,
+  threadEnvironment,
+} from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import * as Option from "effect/Option";
+import { resolveConversationRequestProvider } from "@t3tools/client-runtime/state/conversation-organization";
+import { resolveProvidersForCwd } from "@t3tools/client-runtime/providerSkills";
+import { getClientSettings, useClientSettings } from "../../hooks/useSettings";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { serverEnvironment } from "../../state/server";
+import { environmentShell, useEnvironmentShellStatus } from "../../state/shell";
+import { providerInstanceEntriesFor } from "../../providerInstances";
+import { getProviderScopeSendBlockReason } from "../ChatView.logic";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 
 function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
@@ -21,6 +34,49 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
   const [responding, setResponding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { approval } = entry;
+  const { environmentId } = entry.thread;
+  const enabled = useClientSettings((settings) => settings.sidebarPinnedStatusEnabled);
+  const settingsAtom = serverEnvironment.settingsValueAtom(environmentId);
+  const providersAtom = serverEnvironment.providersValueAtom(environmentId);
+  const detailAtom = environmentThreadDetails.stateAtom(entry.thread);
+  const settings = useAtomValue(settingsAtom);
+  const providers = useAtomValue(providersAtom);
+  const detail = useAtomValue(detailAtom);
+  const shell = useEnvironmentShellStatus(environmentId);
+  const providerBlocked = (
+    currentDetail: typeof detail,
+    currentSettings: typeof settings,
+    currentProviders: typeof providers,
+    shellStatus: typeof shell,
+  ) => {
+    const projection = Option.getOrNull(currentDetail.data);
+    const target = resolveConversationRequestProvider(projection, approval.requestId);
+    if (approval.responseCapability !== "live") return false;
+    if (!projection || !target) return true;
+    return (
+      getProviderScopeSendBlockReason({
+        providerScope: undefined,
+        draftEnvironmentId: environmentId,
+        requestedProviderInstanceId: target.providerInstanceId,
+        requestedProviderDriver: target.driver,
+        explicitProviderInstanceId: undefined,
+        resolvedProviderInstanceId: target.providerInstanceId,
+        attachedHermesInstanceIds: Object.entries(currentSettings?.providerInstances ?? {})
+          .filter(([, config]) => config.driver === "hermes")
+          .map(([id]) => id),
+        entries:
+          currentSettings && currentProviders
+            ? providerInstanceEntriesFor(
+                resolveProvidersForCwd(currentProviders, projection.thread.worktreePath),
+                currentSettings,
+                projection.thread.projectId,
+              )
+            : [],
+        shellStatus,
+      }) !== null
+    );
+  };
+  const unavailable = enabled && providerBlocked(detail, settings, providers, shell);
   return (
     <section
       aria-label={gt("Approval from {title}", { title: entry.title })}
@@ -40,6 +96,7 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
           <T>Provider process is gone. Interrupt or restart the child thread to respond.</T>
         </p>
       ) : null}
+      {unavailable ? <p className="mt-2 text-warning">{gt("Provider unavailable")}</p> : null}
       {approval.reason ? <p className="mt-2 text-muted-foreground">{approval.reason}</p> : null}
       {approval.fullAccessOverride ? (
         <p className="mt-2 text-muted-foreground">
@@ -52,10 +109,20 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
           requestId={approval.requestId}
           isResponding={responding}
           canRespond={approval.responseCapability === "live"}
-          disabled={!canRespond}
+          disabled={!canRespond || unavailable}
           options={approval.options}
           onRespondToApproval={async (requestId, decision) => {
             if (!canRespond || responding) return;
+            if (
+              getClientSettings().sidebarPinnedStatusEnabled &&
+              providerBlocked(
+                appAtomRegistry.get(detailAtom),
+                appAtomRegistry.get(settingsAtom),
+                appAtomRegistry.get(providersAtom),
+                appAtomRegistry.get(environmentShell.statusAtom(environmentId)),
+              )
+            )
+              return;
             setResponding(true);
             setError(null);
             const result = await respond({

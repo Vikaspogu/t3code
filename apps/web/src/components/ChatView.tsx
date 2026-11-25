@@ -82,6 +82,7 @@ import {
   type ModelSelection,
   type PreviewAnnotationPayload,
   ProviderInstanceId,
+  type RuntimeRequestId,
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
@@ -231,9 +232,14 @@ import {
 } from "../providerInstances";
 import {
   useClientSettings,
+  getClientSettings,
   useClientSettingsHydrated,
   useEnvironmentSettings,
 } from "../hooks/useSettings";
+import {
+  resolveConversationProviderDriver,
+  resolveConversationRequestProvider,
+} from "@t3tools/client-runtime/state/conversation-organization";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
@@ -296,7 +302,11 @@ import {
   useQuietThreadShell,
   useThreadCheckpointSummaries,
 } from "../state/entities";
-import { useEnvironmentShellHasSnapshot } from "../state/shell";
+import {
+  environmentShell,
+  useEnvironmentShellHasSnapshot,
+  useEnvironmentShellStatus,
+} from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialogHost, openExpandedImagePreview } from "./chat/ExpandedImageDialog";
@@ -383,6 +393,7 @@ import {
   startNewThreadForProject,
   codexArtifactTemplatePromptToAppend,
   shouldRefocusComposerOnWindowFocus,
+  getProviderScopeSendBlockReason,
   hasCompactableConversation,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -615,6 +626,9 @@ export default function ChatView(props: ChatViewProps) {
   })();
   const settings = useEnvironmentSettings(environmentId);
   const clientSettingsHydrated = useClientSettingsHydrated();
+  const conversationOrganizationEnabled = useClientSettings(
+    (value) => value.sidebarPinnedStatusEnabled,
+  );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   // Selects primitives: an object here is new on every router store update, which
@@ -1240,6 +1254,9 @@ export default function ChatView(props: ChatViewProps) {
   const activeEnvironmentBootstrapComplete = useEnvironmentShellHasSnapshot(
     activeThread?.environmentId ?? null,
   );
+  const conversationShellStatus = useEnvironmentShellStatus(
+    activeThread?.environmentId ?? draftThread?.environmentId ?? null,
+  );
   const activeProjectKey = activeProject
     ? `${activeProject.environmentId}:${activeProject.workspaceRoot}`
     : null;
@@ -1436,6 +1453,90 @@ export default function ChatView(props: ChatViewProps) {
   });
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
+  const attachedHermesInstanceIds =
+    conversationOrganizationEnabled || draftThread?.providerScope !== undefined
+      ? Object.entries(settings.providerInstances)
+          .filter(([, instance]) => instance.driver === "hermes")
+          .map(([instanceId]) => instanceId)
+      : [];
+  const providerScopeSendBlockReason =
+    conversationOrganizationEnabled || draftThread?.providerScope !== undefined
+      ? getProviderScopeSendBlockReason({
+          providerScope: threadHasStarted(activeThread) ? undefined : draftThread?.providerScope,
+          draftEnvironmentId: activeThread?.environmentId ?? draftThread?.environmentId ?? null,
+          requestedProviderInstanceId: threadProvider,
+          requestedProviderDriver: resolveConversationProviderDriver(
+            serverProjection,
+            selectedProviderByThreadId ?? threadProvider,
+          ),
+          explicitProviderInstanceId: selectedProviderByThreadId,
+          resolvedProviderInstanceId: activeProviderInstanceId,
+          resolvedProviderDriver: selectedProvider,
+          attachedHermesInstanceIds,
+          entries: providerInstanceEntries,
+          shellStatus: conversationShellStatus,
+        })
+      : null;
+  const readProviderSendBlockReason = (
+    instanceId: ProviderInstanceId,
+    driver: typeof selectedProvider,
+    target?: "fanout",
+  ) => {
+    const scope = threadHasStarted(activeThread) ? undefined : draftThread?.providerScope;
+    if (!scope && !getClientSettings().sidebarPinnedStatusEnabled) return null;
+    const serverSettings = appAtomRegistry.get(serverEnvironment.settingsValueAtom(environmentId));
+    const currentProviders = appAtomRegistry.get(
+      serverEnvironment.providersValueAtom(environmentId),
+    );
+    return getProviderScopeSendBlockReason({
+      providerScope: target === "fanout" ? undefined : scope,
+      draftEnvironmentId: environmentId,
+      requestedProviderInstanceId: target === "fanout" ? instanceId : threadProvider,
+      requestedProviderDriver:
+        target === "fanout"
+          ? driver
+          : resolveConversationProviderDriver(
+              serverProjection,
+              selectedProviderByThreadId ?? threadProvider,
+            ),
+      explicitProviderInstanceId: target === "fanout" ? undefined : selectedProviderByThreadId,
+      resolvedProviderInstanceId: instanceId,
+      resolvedProviderDriver: driver,
+      attachedHermesInstanceIds: Object.entries(serverSettings?.providerInstances ?? {})
+        .filter(([, entry]) => entry.driver === "hermes")
+        .map(([id]) => id),
+      entries:
+        serverSettings && currentProviders
+          ? providerInstanceEntriesFor(
+              resolveProvidersForCwd(currentProviders, gitCwd),
+              serverSettings,
+              activeProject?.id ?? null,
+            )
+          : [],
+      shellStatus: appAtomRegistry.get(environmentShell.statusAtom(environmentId)),
+    });
+  };
+  const getRequestProviderUnavailableReason = (requestId: RuntimeRequestId) => {
+    if (!conversationOrganizationEnabled) return null;
+    const target = resolveConversationRequestProvider(
+      serverProjection?.thread.id === activeThreadId ? serverProjection : null,
+      requestId,
+    );
+    if (target === undefined) return gt("Provider unavailable");
+    if (target === null) return null;
+    const reason = getProviderScopeSendBlockReason({
+      providerScope: undefined,
+      draftEnvironmentId: environmentId,
+      requestedProviderInstanceId: target.providerInstanceId,
+      requestedProviderDriver: target.driver,
+      explicitProviderInstanceId: undefined,
+      resolvedProviderInstanceId: target.providerInstanceId,
+      attachedHermesInstanceIds,
+      entries: providerInstanceEntries,
+      shellStatus: conversationShellStatus,
+    });
+    return reason === null ? null : gt("Provider unavailable");
+  };
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const activeUsageModel =
     [
@@ -1468,6 +1569,7 @@ export default function ChatView(props: ChatViewProps) {
     pendingUserInputs,
     activePendingApproval,
     activePendingUserInput,
+    pendingUserInputUnavailableReason,
     activePendingIsResponding,
     respondingRequestIds,
     onRespondToApproval: onRespondToApprovalStable,
@@ -1481,6 +1583,7 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     activeThreadId,
     serverProjection,
+    getRequestProviderUnavailableReason,
     supportsQuestionAttachments,
     composerDraftTarget,
     setComposerDraftPrompt,
@@ -3121,6 +3224,7 @@ export default function ChatView(props: ChatViewProps) {
     setThreadError,
   });
   const { onSend, captureDetachedSend } = useComposerSend({
+    readProviderSendBlockReason,
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
@@ -3920,7 +4024,11 @@ export default function ChatView(props: ChatViewProps) {
                                             ? gt("Messages loading")
                                             : worktreeSetupBlocksSend
                                               ? gt("Preparing worktree")
-                                              : projectCloneSendBlockReason
+                                              : (projectCloneSendBlockReason ??
+                                                providerScopeSendBlockReason)
+                                }
+                                pendingUserInputUnavailableReason={
+                                  pendingUserInputUnavailableReason
                                 }
                                 isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                                 bannerItems={

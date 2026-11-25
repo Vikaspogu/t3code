@@ -2077,6 +2077,28 @@ describe("mobile composer drafts", () => {
     ]);
   });
 
+  it("reloads a scoped Hermes draft and reuses it only while empty and in the same scope", async () => {
+    const project = {
+      environmentId: EnvironmentId.make("environment-1"),
+      projectId: ProjectId.make("scratch"),
+    };
+    const selection = { instanceId: ProviderInstanceId.make("hermes-work"), model: "general" };
+    const draftKey = createNewTaskDraft(project, selection);
+    expect(createNewTaskDraft(project, selection)).toBe(draftKey);
+    expect(createNewTaskDraft(project)).not.toBe(draftKey);
+    expect(
+      createNewTaskDraft({ ...project, environmentId: EnvironmentId.make("other-env") }, selection),
+    ).not.toBe(draftKey);
+    await flushComposerDrafts();
+    const restored = decodePersistedComposerState(JSON.parse(composerDraftFileMocks.getDocument()));
+    expect(restored.drafts[draftKey]).toMatchObject({
+      modelSelection: selection,
+      providerScope: { environmentId: project.environmentId, instanceId: selection.instanceId },
+    });
+    setComposerDraftText(draftKey, "Keep this prompt");
+    expect(createNewTaskDraft(project, selection)).not.toBe(draftKey);
+    expect(getComposerDraftSnapshot(draftKey).text).toBe("Keep this prompt");
+  });
   it("keeps a freshly minted new-task draft bound until content arrives, then lists it per project", () => {
     const project = {
       environmentId: EnvironmentId.make("environment-1"),

@@ -50,6 +50,7 @@ export function useThreadListV2(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly searchQuery: string;
+  readonly conversation?: LayoutInput["conversation"];
   /** Threads that match the search by content, keyed like `threadSearchMatchKey`. */
   readonly searchMatches: ReadonlyMap<string, unknown>;
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
@@ -142,6 +143,7 @@ export function useThreadListV2(input: {
         environmentId: input.environmentId,
         projectRefs: input.projectRefs,
         searchQuery: input.searchQuery,
+        ...(input.conversation ? { conversation: input.conversation } : {}),
         matchedThreadKeys: new Set(input.searchMatches.keys()),
         settlementEnvironmentIds: input.settlementEnvironmentIds,
         snoozeEnvironmentIds: input.snoozeEnvironmentIds,
@@ -176,6 +178,7 @@ export function useThreadListV2(input: {
       input.environmentId,
       input.projectRefs,
       input.searchQuery,
+      input.conversation,
       input.searchMatches,
       input.settlementEnvironmentIds,
       input.snoozeEnvironmentIds,

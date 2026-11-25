@@ -502,9 +502,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "pinned-status",
-    title: msg("Pinned thread status"),
+    title: msg("Conversation organization"),
     to: "/settings/general",
-    searchTerms: [msg("collapsed pinned summary needs you failed new working priority preview")],
+    searchTerms: [
+      msg(
+        "collapsed pinned summary needs you failed new working priority preview conversation organization hermes provider instances connected disabled offline",
+      ),
+    ],
   },
   {
     id: "boring-sidebar",

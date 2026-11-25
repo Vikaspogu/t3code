@@ -66,6 +66,8 @@ import {
   scheduleUnusedComposerAttachmentCleanup,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { environmentShell, useEnvironmentShellReadiness } from "../../state/shell";
 import { useProjectClone } from "../../state/projectClones";
 import { projectEnvironment } from "../../state/projects";
 import { sourceControlEnvironment } from "../../state/sourceControl";
@@ -75,6 +77,7 @@ import {
   describeUnavailableModelSelection,
   isModelSelectionUnavailable,
   resolveSelectableModelSelection,
+  isScopedHermesDraftReady,
 } from "../../lib/modelOptions";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import {
@@ -200,6 +203,7 @@ export function NewTaskDraftScreen(props: {
     selectedProject?.environmentId ?? null,
   );
   const environmentConnected = connectionState === "connected";
+  const shell = useEnvironmentShellReadiness(selectedProject?.environmentId ?? null);
   const canOperate = useEnvironmentScope(
     selectedProject?.environmentId ?? null,
     AuthOrchestrationOperateScope,
@@ -601,6 +605,22 @@ export function NewTaskDraftScreen(props: {
       return null;
     }
     const draft = getComposerDraftSnapshot(draftKey);
+    if (draft.providerScope) {
+      const { environmentId } = selectedProject;
+      if (
+        !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
+        !isScopedHermesDraftReady(
+          appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId),
+          selectedProject,
+          draft.providerScope,
+          draft.modelSelection,
+          environmentConnected &&
+            appAtomRegistry.get(environmentShell.statusAtom(environmentId)) === "live",
+        )
+      ) {
+        return null;
+      }
+    }
     if (appAtomRegistry.get(composerContextImportsAtom)[draftKey]) return null;
     const modelSelection =
       resolveSelectableModelSelection(
@@ -722,8 +742,18 @@ export function NewTaskDraftScreen(props: {
   // an empty loading surface here flashes between two already-cached threads.
   if (!selectedProject) return null;
 
-  const setupBlockReason =
-    isIncomingShareReady && !isImportingShare
+  const scopedProviderUnavailable =
+    flow.providerScope !== undefined &&
+    !isScopedHermesDraftReady(
+      selectedEnvironmentServerConfig,
+      selectedProject,
+      flow.providerScope,
+      flow.selectedModel,
+      environmentConnected && shell.status === "live",
+    );
+  const setupBlockReason = scopedProviderUnavailable
+    ? gt("Provider unavailable")
+    : isIncomingShareReady && !isImportingShare
       ? cloneBlocksStart
         ? gt("Wait for the project clone to finish.")
         : flow.submitting
@@ -1126,7 +1156,7 @@ export function NewTaskDraftScreen(props: {
         offersSideChat={false}
         onSendCommand={async () => null}
         onReconnectEnvironment={() => onReconnectEnvironment(selectedProject.environmentId)}
-        canSwitchThreadProvider
+        canSwitchThreadProvider={flow.providerScope === undefined}
         onRespondToApproval={async () => {}}
         onSelectUserInputOption={() => {}}
         onChangeUserInputCustomAnswer={() => {}}

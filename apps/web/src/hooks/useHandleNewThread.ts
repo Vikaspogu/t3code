@@ -6,6 +6,9 @@ import {
 import {
   DEFAULT_SERVER_SETTINGS,
   type ScopedProjectRef,
+  type ModelSelection,
+  type ServerProvider,
+  type ServerSettings,
   type T3ProjectFile,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -15,6 +18,7 @@ import {
   composerDraftHasUserContent,
   markPromotedDraftThreadByRef,
   type DraftId,
+  type DraftProviderScope,
   type DraftSessionState,
   type DraftThreadEnvMode,
   type DraftThreadState,
@@ -58,7 +62,15 @@ import { useAtomValue } from "@effect/atom-react";
 import { defaultProjectFallbackReadyAtom } from "../state/projects";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
-import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
+import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import { resolveAppModelSelectionForInstance } from "../modelSelection";
+import { isRuntimeModelDefaultAlias } from "../providerModels";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  isProviderInstancePickerReady,
+  resolveProjectDefaultProviderModelSelection,
+} from "../providerInstances";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 
 export const LAST_USED_PROJECT_STORAGE_KEY = "t3code:last-used-project:v1";
@@ -127,6 +139,79 @@ export function useNewThreadHandler() {
 
 export type NewThreadHandler = ReturnType<typeof createNewThreadHandler>;
 
+/**
+ * An explicit provider selection never falls back: the exact environment, configured
+ * instance, driver, and readiness must hold, or the new conversation is refused.
+ */
+export function assertExplicitProviderSelection(input: {
+  readonly projectRef: ScopedProjectRef;
+  readonly selection: ModelSelection | undefined;
+  readonly scope: DraftProviderScope | undefined;
+  readonly config:
+    | { readonly providers: ReadonlyArray<ServerProvider>; readonly settings: ServerSettings }
+    | undefined;
+}): void {
+  const { projectRef, selection, scope, config } = input;
+  if (selection === undefined) {
+    if (scope !== undefined) throw new Error("A provider draft scope needs an explicit selection.");
+    return;
+  }
+  if (
+    scope !== undefined &&
+    (scope.environmentId !== projectRef.environmentId ||
+      scope.providerInstanceId !== selection.instanceId)
+  ) {
+    throw new Error("The provider draft scope does not match the selected provider.");
+  }
+  if (config === undefined) {
+    throw new Error(`Environment ${projectRef.environmentId} has no server configuration.`);
+  }
+  const entry = applyProviderInstanceSettings(
+    deriveProviderInstanceEntries(config.providers),
+    config.settings,
+    projectRef.projectId,
+  ).find((candidate) => candidate.instanceId === selection.instanceId);
+  if (entry === undefined) {
+    throw new Error(`Provider ${selection.instanceId} is not available in this environment.`);
+  }
+  const configured = Object.hasOwn(config.settings.providerInstances ?? {}, selection.instanceId)
+    ? config.settings.providerInstances[selection.instanceId]
+    : undefined;
+  if (configured === undefined && !entry.isDefault) {
+    throw new Error(`Provider ${selection.instanceId} is not configured in this environment.`);
+  }
+  if (configured !== undefined && configured.driver !== entry.driverKind) {
+    throw new Error(`Provider ${selection.instanceId} does not match its configured driver.`);
+  }
+  if (!isProviderInstancePickerReady(entry)) {
+    throw new Error(`Provider ${selection.instanceId} is not ready.`);
+  }
+  // The same resolver the composer uses: catalog and custom models pass, a runtime catalog keeps a
+  // model a refresh briefly omitted, and anything else is refused instead of silently replaced.
+  const followsSessionModel =
+    isRuntimeModelDefaultAlias(entry.driverKind, selection.model) ||
+    (entry.driverKind === "antigravity" && selection.model === "");
+  if (
+    !followsSessionModel &&
+    resolveAppModelSelectionForInstance(
+      entry.instanceId,
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        ...config.settings,
+        favorites: config.settings.favorites ?? DEFAULT_UNIFIED_SETTINGS.favorites,
+        providerModelPreferences:
+          config.settings.providerModelPreferences ??
+          DEFAULT_UNIFIED_SETTINGS.providerModelPreferences,
+      },
+      config.providers,
+      selection.model,
+      { preserveUnavailableSelection: true },
+    ) !== selection.model
+  ) {
+    throw new Error(`Model ${selection.model} is not available on ${selection.instanceId}.`);
+  }
+}
+
 export function createNewThreadHandler(router: AnyRouter) {
   const getCurrentRouteTarget = () => {
     const currentRouteParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};
@@ -143,6 +228,10 @@ export function createNewThreadHandler(router: AnyRouter) {
       replace?: boolean;
       /** Composer text for the draft, set before it shows. A draft with user text keeps it. */
       prompt?: string;
+      /** Exact provider for the draft. Wins over project, carried, sticky, and fallback selections. */
+      modelSelectionOverride?: ModelSelection;
+      /** Reuses and creates drafts per provider instance. Needs `modelSelectionOverride`. */
+      providerDraftScope?: DraftProviderScope;
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
@@ -151,9 +240,22 @@ export function createNewThreadHandler(router: AnyRouter) {
     const environmentServerConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     const targetServerSettings =
       environmentServerConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
+    const explicitSelection = options?.modelSelectionOverride;
+    const providerScope = options?.providerDraftScope;
+    try {
+      assertExplicitProviderSelection({
+        projectRef,
+        selection: explicitSelection,
+        scope: providerScope,
+        config: environmentServerConfigs.get(projectRef.environmentId),
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
     const {
       getComposerDraft,
       getDraftSessionByLogicalProjectKey,
+      getDraftSessionByProviderScope,
       getDraftSession,
       getDraftThread,
       applyStickyState,
@@ -227,6 +329,7 @@ export function createNewThreadHandler(router: AnyRouter) {
       : configuredDefaultModelSelection;
     const defaultRuntimeMode = projectSettings.settings.defaultRuntimeMode;
     const resolveModelSelectionOverride = (destinationDraftId: DraftId) =>
+      explicitSelection ??
       resolveNewThreadModelSelectionOverride({
         projectDefaultSelection: projectDefaultModelSelection ?? null,
         carrySelection: carryModelSelection,
@@ -313,7 +416,9 @@ export function createNewThreadHandler(router: AnyRouter) {
     const hasWorktreePathOption = options?.worktreePath !== undefined;
     const hasEnvModeOption = options?.envMode !== undefined;
     const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
-    const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
+    const storedDraftThread = providerScope
+      ? getDraftSessionByProviderScope(logicalProjectKey, providerScope)
+      : getDraftSessionByLogicalProjectKey(logicalProjectKey);
     const storedDraftThreadRef = storedDraftThread
       ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
       : null;
@@ -329,7 +434,11 @@ export function createNewThreadHandler(router: AnyRouter) {
     }
     const emptyStoredDraftThread =
       reusableStoredDraftThread &&
-      !composerDraftHasUserContent(getComposerDraft(reusableStoredDraftThread.draftId))
+      !composerDraftHasUserContent(getComposerDraft(reusableStoredDraftThread.draftId)) &&
+      // A scoped draft the user switched to another provider is not this provider's draft.
+      (providerScope === undefined ||
+        getComposerDraft(reusableStoredDraftThread.draftId)?.activeProvider ===
+          explicitSelection?.instanceId)
         ? reusableStoredDraftThread
         : null;
     const latestActiveDraftThread: DraftThreadState | null = currentRouteTarget
@@ -367,7 +476,16 @@ export function createNewThreadHandler(router: AnyRouter) {
         }
         const storedDraft = getComposerDraft(emptyStoredDraftThread.draftId);
         const storedDraftHasExplicitModelPick = hasExplicitComposerModelSelection(storedDraft);
-        if (!storedDraftHasExplicitModelPick) {
+        if (explicitSelection) {
+          if (
+            storedDraft?.modelSelectionByProvider[explicitSelection.instanceId]?.model !==
+            explicitSelection.model
+          ) {
+            setModelSelection(emptyStoredDraftThread.draftId, explicitSelection, {
+              replaceOptions: true,
+            });
+          }
+        } else if (!storedDraftHasExplicitModelPick) {
           applyStickyState(emptyStoredDraftThread.draftId);
           const modelSelectionOverride = resolveModelSelectionOverride(
             emptyStoredDraftThread.draftId,
@@ -385,6 +503,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           emptyStoredDraftThread.draftId,
           {
             threadId: emptyStoredDraftThread.threadId,
+            ...(providerScope ? { providerScope } : {}),
             ...workspaceContext,
             ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
             ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
@@ -413,7 +532,9 @@ export function createNewThreadHandler(router: AnyRouter) {
     }
 
     if (
+      explicitSelection === undefined &&
       latestActiveDraftThread &&
+      latestActiveDraftThread.providerScope === undefined &&
       currentRouteTarget?.kind === "draft" &&
       latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
       latestActiveDraftThread.promotedTo == null &&
@@ -450,6 +571,7 @@ export function createNewThreadHandler(router: AnyRouter) {
       setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, {
         threadId,
         createdAt,
+        ...(providerScope ? { providerScope } : {}),
         branch: options?.branch ?? null,
         worktreePath: options?.worktreePath ?? null,
         envMode: initialEnvMode,

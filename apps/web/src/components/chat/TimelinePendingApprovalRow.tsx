@@ -82,7 +82,9 @@ export const TimelinePendingApprovalRow = memo(function TimelinePendingApprovalR
           <span className="text-muted-foreground select-text wrap-anywhere">{approval.reason}</span>
         ) : null}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          {canRespond ? (
+          {approval.responseBlockedReason ? (
+            <span className="text-warning">{approval.responseBlockedReason}</span>
+          ) : canRespond ? (
             <>
               <span className="inline-flex items-center gap-1 text-warning">
                 <ShieldIcon aria-hidden className="size-3 shrink-0" />

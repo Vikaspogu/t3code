@@ -63,6 +63,7 @@ import { derivePhase } from "../session-logic";
 import { makeThreadFixture, makeThreadProjectionFixture } from "../test-fixtures";
 import {
   getAntigravitySendBlockReason,
+  getProviderScopeSendBlockReason,
   resolveComposerProviderSelection,
   resolveWorktreeSetupProgress,
   peekRememberedThreadTimeline,
@@ -1775,5 +1776,179 @@ describe("resolveThreadErrorBanner", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(resolveThreadErrorBanner(input)).toEqual(expected);
+  });
+});
+
+describe("getProviderScopeSendBlockReason", () => {
+  const hermesId = ProviderInstanceId.make("hermes_work");
+  const codexId = ProviderInstanceId.make("codex");
+  const otherEnvironmentId = EnvironmentId.make("environment-other");
+  const scope = { environmentId, providerInstanceId: hermesId };
+
+  function entryFor(
+    driver: string,
+    instanceId: ProviderInstanceId,
+    overrides: Partial<ServerProvider> = {},
+  ) {
+    return deriveProviderInstanceEntries([
+      {
+        driver: ProviderDriverKind.make(driver),
+        instanceId,
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+        version: null,
+        checkedAt: now,
+        models: [],
+        slashCommands: [],
+        skills: [],
+        ...overrides,
+      },
+    ])[0]!;
+  }
+
+  const hermes = entryFor("hermes", hermesId);
+  const codex = entryFor("codex", codexId);
+  const ready = {
+    providerScope: scope,
+    requestedProviderInstanceId: hermesId,
+    attachedHermesInstanceIds: [hermesId],
+    draftEnvironmentId: environmentId,
+    explicitProviderInstanceId: hermesId,
+    resolvedProviderInstanceId: hermesId,
+    entries: [codex, hermes],
+    shellStatus: "live" as const,
+  };
+
+  it("allows ready Hermes and does not apply Hermes freshness to coding conversations", () => {
+    expect(getProviderScopeSendBlockReason(ready)).toBeNull();
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        providerScope: undefined,
+        requestedProviderInstanceId: codexId,
+        explicitProviderInstanceId: codexId,
+        shellStatus: "cached",
+        resolvedProviderInstanceId: codexId,
+      }),
+    ).toBeNull();
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        providerScope: undefined,
+        requestedProviderInstanceId: codexId,
+        explicitProviderInstanceId: codexId,
+        resolvedProviderInstanceId: null,
+        entries: [],
+      }),
+    ).toBeNull();
+  });
+
+  it("lets an explicit switch to another provider replace the old scope", () => {
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        explicitProviderInstanceId: codexId,
+        resolvedProviderInstanceId: codexId,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects a captured Hermes send even after its instance vanishes from the catalog", () => {
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        providerScope: undefined,
+        requestedProviderInstanceId: codexId,
+        explicitProviderInstanceId: undefined,
+        resolvedProviderInstanceId: hermesId,
+        resolvedProviderDriver: ProviderDriverKind.make("hermes"),
+        attachedHermesInstanceIds: [],
+        entries: [],
+      }),
+    ).toBe("This provider is unavailable. Choose another provider.");
+  });
+
+  it.each([
+    ["disabled", entryFor("hermes", hermesId, { enabled: false })],
+    ["not ready", entryFor("hermes", hermesId, { status: "error" })],
+  ])("blocks instead of falling back to another provider when the instance is %s", (_, broken) => {
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        entries: [codex, broken],
+        resolvedProviderInstanceId: codexId,
+      }),
+    ).not.toBeNull();
+  });
+
+  it("blocks a removed instance and a draft that lost its explicit selection", () => {
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        entries: [codex],
+        resolvedProviderInstanceId: codexId,
+      }),
+    ).not.toBeNull();
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        explicitProviderInstanceId: null,
+        resolvedProviderInstanceId: codexId,
+      }),
+    ).not.toBeNull();
+  });
+
+  it("blocks a draft moved to another environment", () => {
+    expect(
+      getProviderScopeSendBlockReason({ ...ready, draftEnvironmentId: otherEnvironmentId }),
+    ).not.toBeNull();
+  });
+
+  it.each(["empty", "cached", "synchronizing", null] as const)(
+    "blocks until the environment shell is live (%s)",
+    (shellStatus) => {
+      expect(getProviderScopeSendBlockReason({ ...ready, shellStatus })).not.toBeNull();
+    },
+  );
+
+  it.each(["cached", "synchronizing"] as const)(
+    "blocks started Hermes conversations with %s state",
+    (shellStatus) => {
+      expect(
+        getProviderScopeSendBlockReason({ ...ready, providerScope: undefined, shellStatus }),
+      ).not.toBeNull();
+    },
+  );
+
+  it("blocks a detached configured instance despite a stale ready snapshot", () => {
+    expect(
+      getProviderScopeSendBlockReason({ ...ready, attachedHermesInstanceIds: [] }),
+    ).not.toBeNull();
+  });
+
+  it("blocks fallback to another instance for a started Hermes conversation", () => {
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        providerScope: undefined,
+        resolvedProviderInstanceId: codexId,
+      }),
+    ).not.toBeNull();
+  });
+
+  it("checks the new Hermes instance after an explicit provider switch", () => {
+    const other = ProviderInstanceId.make("another-cluster");
+    expect(
+      getProviderScopeSendBlockReason({
+        ...ready,
+        requestedProviderInstanceId: other,
+        explicitProviderInstanceId: other,
+        resolvedProviderInstanceId: other,
+        attachedHermesInstanceIds: [hermesId, other],
+        entries: [hermes, entryFor("hermes", other, { enabled: false })],
+      }),
+    ).not.toBeNull();
   });
 });

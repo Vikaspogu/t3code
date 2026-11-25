@@ -346,6 +346,7 @@ export function restoreComposerDraft(
 
 export interface MultipleModelTarget {
   readonly selection: ModelSelection;
+  readonly driver: ProviderInstanceEntry["driverKind"];
   readonly text: string;
 }
 
@@ -381,6 +382,7 @@ export function resolveMultipleModelTargets(input: {
         selection.model,
         providerState.modelOptionsForDispatch,
       ),
+      driver: provider.driverKind,
       text: formatOutgoingPrompt({
         provider: provider.driverKind,
         model: selection.model,

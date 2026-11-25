@@ -64,6 +64,10 @@ import { useThreadSearch } from "../../state/queries";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { useThreadListSearchMatches } from "../threads/useThreadListSearchMatches";
 import { useThreadListV2 } from "../threads/useThreadListV2";
+import {
+  ThreadConversationFilters,
+  useThreadConversationFilters,
+} from "../threads/ThreadConversationFilters";
 import { useSidebarRowThreadKey } from "../threads/useSidebarRowThreadKey";
 import { useThreadListNow } from "../threads/use-thread-list-now";
 import { useSearchScrollRestoration } from "../layout/workspace/useSearchScrollRestoration";
@@ -391,6 +395,7 @@ export function HomeScreen(props: HomeScreenProps) {
     setSettledVisibleCount((count) => count + THREAD_LIST_V2_SETTLED_PAGE_COUNT);
   const {
     loaded: shelfPreferencesLoaded,
+    sidebarPinnedStatusEnabled,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
@@ -404,6 +409,10 @@ export function HomeScreen(props: HomeScreenProps) {
     toggleIdleShelf,
   } = useThreadListV2ShelfPreferences();
   const now = useThreadListNow(props.threads);
+  const conversation = useThreadConversationFilters(
+    sidebarPinnedStatusEnabled,
+    props.selectedEnvironmentId,
+  );
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -426,6 +435,7 @@ export function HomeScreen(props: HomeScreenProps) {
     olderSettledShelf,
   } = useThreadListV2({
     threads: props.threads,
+    conversation: conversation?.filter,
     pendingTasks: props.pendingTasks,
     environmentId: props.selectedEnvironmentId,
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -716,6 +726,13 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2ListHeader = (
     <>
       {listHeader}
+      {conversation && threadListV2Layout.conversationCounts ? (
+        <ThreadConversationFilters
+          controller={conversation}
+          counts={threadListV2Layout.conversationCounts}
+          environments={props.environments}
+        />
+      ) : null}
       {Platform.OS === "ios" && workspace ? (
         <ThreadListFilters
           gutter={sidebarSurface ? 8 : 0}

@@ -95,6 +95,7 @@ import {
   AppState,
   Keyboard,
   Platform,
+  Text,
   useWindowDimensions,
   View,
   type GestureResponderEvent,
@@ -242,6 +243,8 @@ export interface ThreadDetailScreenProps {
   };
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
   readonly canOperateThread: boolean;
+  readonly providerUnavailableReason?: string | null;
+  readonly requestProviderUnavailableReason?: string | null;
   readonly selectedThread: EnvironmentThreadShell;
   /** Use this for detail reads; it stays null until queued creation reaches the server. */
   readonly selectedThreadDetailRef: ScopedThreadRef | null;
@@ -1840,6 +1843,11 @@ function ThreadDetailBody(
                         entering={FadeInDown.duration(220)}
                         exiting={FadeOut.duration(140)}
                       >
+                        {props.requestProviderUnavailableReason ? (
+                          <Text className="px-3 text-sm text-muted-foreground">
+                            {props.requestProviderUnavailableReason}
+                          </Text>
+                        ) : null}
                         {props.activePendingApproval ? (
                           <Animated.ScrollView
                             key={props.activePendingApproval.requestId}
@@ -1848,7 +1856,9 @@ function ThreadDetailBody(
                             nestedScrollEnabled
                           >
                             <PendingApprovalCard
-                              canOperateThread={props.canOperateThread}
+                              canOperateThread={
+                                props.canOperateThread && !props.requestProviderUnavailableReason
+                              }
                               approval={props.activePendingApproval}
                               respondingApprovalId={props.respondingApprovalId}
                               onRespond={props.onRespondToApproval}
@@ -1860,7 +1870,9 @@ function ThreadDetailBody(
                             environmentId={props.environmentId}
                             threadId={props.selectedThread.id}
                             workspaceRoot={props.threadCwd}
-                            canOperateThread={props.canOperateThread}
+                            canOperateThread={
+                              props.canOperateThread && !props.requestProviderUnavailableReason
+                            }
                             pendingUserInput={props.activePendingUserInput}
                             maxHeight={pendingUserInputMaxHeight}
                             collapsed={userInputCollapsed}
@@ -1985,12 +1997,16 @@ function ThreadDetailBody(
                         projectCwd={props.threadCwd ?? props.projectWorkspaceRoot}
                         // Keep follow-ups in the draft until server creation succeeds, or rejection strands them in the outbox.
                         sendBlockedReason={
-                          props.draftMode
+                          props.providerUnavailableReason ??
+                          (props.activePendingApprovals.length > 0
+                            ? props.requestProviderUnavailableReason
+                            : null) ??
+                          (props.draftMode
                             ? props.draftMode.sendBlockedReason
                             : props.creationState?.kind === "preparing" &&
                                 !props.creationState.serverOwned
                               ? gt("Starting the task…")
-                              : null
+                              : null)
                         }
                         interactionLocked={props.draftMode?.interactionLocked}
                         draftKey={props.composerDraftKey ?? undefined}

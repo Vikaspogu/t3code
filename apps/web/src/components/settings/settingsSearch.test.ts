@@ -217,6 +217,11 @@ describe("searchSettings", () => {
     expect(ids(true)).toContain("welcome-page");
   });
 
+  it("finds conversation organization by its provider grouping terms", () => {
+    expect(searchSettings("conversation organization")[0]?.id).toBe("pinned-status");
+    expect(searchSettings("hermes provider")[0]?.id).toBe("pinned-status");
+  });
+
   it("finds keybinding commands by label, command id, and default key", () => {
     expect(searchSettings("toggle sidebar")[0]?.id).toBe("keybinding-sidebar.toggle");
     expect(searchSettings("sidebar.toggle")[0]?.id).toBe("keybinding-sidebar.toggle");
