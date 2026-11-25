@@ -219,6 +219,10 @@
       "types": "./src/voice/mobile.ts",
       "default": "./src/voice/mobile.ts"
     },
+    "./state/conversation-organization": {
+      "types": "./src/state/conversationOrganization.ts",
+      "default": "./src/state/conversationOrganization.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

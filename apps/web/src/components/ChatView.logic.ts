@@ -94,7 +94,7 @@ import {
   terminalContextReference,
 } from "../lib/composerContextRecords";
 import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
-import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { DraftProviderScope, DraftThreadEnvMode } from "../composerDraftStore";
 import { type ComposerSubmissionIntent } from "../composer-logic";
 import type { ReviewCommentContext } from "../reviewCommentContext";
 import { derivePhase, type TimelineEntry } from "../session-logic";
@@ -102,6 +102,7 @@ import type { PreviewMiniPlayerSource } from "../previewMiniPlayerStore";
 import type { DesktopPreviewOverlay } from "../previewStateStore";
 import type { RightPanelSurface } from "../rightPanelStore";
 import {
+  isProviderInstancePickerReady,
   NO_PROVIDER_MODEL_SELECTION,
   resolveSelectableProviderInstanceEntry,
   type ProviderInstanceEntry,
@@ -546,6 +547,64 @@ export function resolveComposerProviderSelection(input: {
     lockedContinuationGroupKey,
     unavailableProviderInstanceId,
   };
+}
+
+export function getProviderScopeSendBlockReason(input: {
+  providerScope: DraftProviderScope | undefined;
+  draftEnvironmentId: EnvironmentId | null;
+  requestedProviderInstanceId: ProviderInstanceId | null | undefined;
+  requestedProviderDriver?: ProviderDriverKind | undefined;
+  explicitProviderInstanceId: ProviderInstanceId | null | undefined;
+  resolvedProviderInstanceId: ProviderInstanceId | null | undefined;
+  resolvedProviderDriver?: ProviderDriverKind | undefined;
+  attachedHermesInstanceIds: ReadonlyArray<string>;
+  entries: ReadonlyArray<ProviderInstanceEntry>;
+  shellStatus: "empty" | "cached" | "synchronizing" | "live" | null | undefined;
+  resolve?: MessageResolver;
+}): string | null {
+  const { providerScope, explicitProviderInstanceId } = input;
+  const intended =
+    explicitProviderInstanceId ??
+    input.requestedProviderInstanceId ??
+    providerScope?.providerInstanceId;
+  const isHermes = (
+    id: ProviderInstanceId | null | undefined,
+    driver: ProviderDriverKind | undefined,
+  ) =>
+    id != null &&
+    (providerScope?.providerInstanceId === id ||
+      input.attachedHermesInstanceIds.includes(id) ||
+      input.entries.some((entry) => entry.instanceId === id && entry.driverKind === "hermes") ||
+      driver === "hermes");
+  const requested = isHermes(intended, input.requestedProviderDriver)
+    ? intended
+    : isHermes(input.resolvedProviderInstanceId, input.resolvedProviderDriver)
+      ? input.resolvedProviderInstanceId
+      : null;
+  if (!requested) return null;
+  const resolve = input.resolve ?? m;
+  const unavailable = resolve(msg("This provider is unavailable. Choose another provider."));
+  const entry = input.entries.find((item) => item.instanceId === requested);
+  const scopedTarget = providerScope?.providerInstanceId === requested;
+  const attached = input.attachedHermesInstanceIds.includes(requested);
+  if (
+    scopedTarget &&
+    (providerScope.environmentId !== input.draftEnvironmentId ||
+      explicitProviderInstanceId !== requested)
+  )
+    return unavailable;
+  if (
+    !attached ||
+    !entry ||
+    entry.driverKind !== "hermes" ||
+    input.resolvedProviderInstanceId !== requested ||
+    !isProviderInstancePickerReady(entry)
+  )
+    return unavailable;
+  if (input.shellStatus !== "live") {
+    return resolve(msg("Wait for the environment to finish syncing before sending."));
+  }
+  return null;
 }
 
 export function getAntigravitySendBlockReason(

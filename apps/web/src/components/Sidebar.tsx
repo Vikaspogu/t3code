@@ -2,7 +2,15 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { m } from "../i18n/messages";
 import { attachSidebarTree } from "../lib/sidebarTree";
-import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
+import { type EnvironmentId, type ScopedProjectRef, type ModelSelection } from "@t3tools/contracts";
+import {
+  attachedHermesHomes,
+  conversationActivity,
+  type ConversationLens,
+  conversationHomeKey,
+  groupConversationsByHome,
+  type HermesConversationHome,
+} from "@t3tools/client-runtime/state/conversation-organization";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
   dropThreadContext,
@@ -13,7 +21,7 @@ import { discardComposerDraft } from "../lib/discardComposerDraft";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import {
   DndContext,
@@ -155,7 +163,7 @@ import {
   useServerConfigs,
   useQuietThreadShells,
 } from "../state/entities";
-import { environmentPresentations } from "../state/presentation";
+import { environmentPresentations, environmentSummaries } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
@@ -235,7 +243,19 @@ import {
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
-import { deriveProviderEntriesByEnvironment } from "../providerInstances";
+import {
+  deriveProviderEntriesByEnvironment,
+  getDefaultProviderInstanceModel,
+  isProviderInstancePickerReady,
+  providerInstanceEntriesFor,
+  NO_PROVIDER_MODEL_SELECTION,
+} from "../providerInstances";
+import { environmentShell } from "../state/shell";
+import { environmentAtomList, environmentIdsKey } from "../state/environmentAtomList";
+import { indexScheduledTaskBindings, scheduledTasksListAtom } from "../state/scheduledTasks";
+import { useScratchProject } from "../hooks/useScratchProject";
+import { useShallow } from "zustand/react/shallow";
+import { SidebarHermesHome } from "./sidebar/SidebarHermesHome";
 import { useStableCallback } from "../hooks/useStableCallback";
 import {
   resolveSidebarRouteReveal,
@@ -340,6 +360,42 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
   return !changed && previous !== null ? previous : next;
 }).pipe(Atom.withLabel("sidebar-provider-entries"));
 
+type SidebarHermesHomeState = {
+  readonly home: HermesConversationHome;
+  readonly isLive: boolean;
+  readonly modelSelection: ModelSelection | null;
+};
+
+const sidebarHermesHomeStatesAtom = Atom.make((get): readonly SidebarHermesHomeState[] => {
+  const configs = get(environmentPresentations.serverConfigsAtom);
+  const providersByEnvironment = get(environmentPresentations.providersByEnvironmentAtom);
+  return attachedHermesHomes(
+    [...configs].map(([environmentId, config]) => [environmentId, config.settings] as const),
+  ).map((home) => {
+    const config = configs.get(home.environmentId)!;
+    const providers = providersByEnvironment.get(home.environmentId) ?? [];
+    const entry = providerInstanceEntriesFor(providers, config.settings, null).find(
+      (candidate) => candidate.instanceId === home.instanceId,
+    );
+    const model = getDefaultProviderInstanceModel(providers, home.instanceId);
+    return {
+      home,
+      isLive: get(environmentShell.statusAtom(home.environmentId)) === "live",
+      modelSelection:
+        entry !== undefined && isProviderInstancePickerReady(entry) && model !== undefined
+          ? { instanceId: home.instanceId, model }
+          : null,
+    };
+  });
+}).pipe(Atom.withLabel("sidebar-hermes-home-states"));
+
+const HERMES_COLLAPSED_KEYS_SCHEMA = Schema.Array(Schema.String);
+const EMPTY_HERMES_HOME_STATES_ATOM = Atom.make<readonly SidebarHermesHomeState[]>([]);
+const sidebarShellStatusesAtom = environmentAtomList(
+  "sidebar-conversation-shell-statuses",
+  environmentShell.statusAtom,
+);
+
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const EMPTY_DRAFT_IDS: readonly DraftId[] = [];
@@ -430,6 +486,7 @@ function useSidebarThreads(input: {
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly threads: readonly EnvironmentThreadShell[];
+  readonly lens: ConversationLens;
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly routeRowThreadKey: string | null;
   readonly departingThreadKey: string | null;
@@ -448,6 +505,7 @@ function useSidebarThreads(input: {
     delegatedUnderParent,
     routeRowThreadKey,
     departingThreadKey,
+    lens,
     folderGroups,
     keepEmptyFolders: keepEmpty,
   } = input;
@@ -460,6 +518,15 @@ function useSidebarThreads(input: {
     inboxReturns.getSnapshot,
   );
   const pinnedStatusEnabled = useClientSettings((s) => s.sidebarPinnedStatusEnabled);
+
+  const hermesHomeStates = useAtomValue(
+    pinnedStatusEnabled ? sidebarHermesHomeStatesAtom : EMPTY_HERMES_HOME_STATES_ATOM,
+  );
+  const [collapsedHomeKeys, setCollapsedHomeKeys] = useLocalStorage(
+    "t3code:sidebar:hermes-collapsed",
+    [] as readonly string[],
+    HERMES_COLLAPSED_KEYS_SCHEMA,
+  );
   const nowMinute = useNowMinute();
   // Minute-quantized clocks would delay second-precise snooze wakes by up to a minute.
   const snoozeWakeClock = useSnoozeWakeClock(threads);
@@ -512,12 +579,40 @@ function useSidebarThreads(input: {
     connectedEnvironmentIds,
     optimisticDrop,
     workingShelfEnabled,
-    sortActiveBySend: folderGroups !== null,
+    sortActiveBySend: folderGroups !== null && !pinnedStatusEnabled,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
 
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
     partition;
+  const statusEnvironmentIds = pinnedStatusEnabled ? connectedEnvironmentIds : [];
+  const shellStatuses = useAtomValue(
+    sidebarShellStatusesAtom(environmentIdsKey(statusEnvironmentIds)),
+  );
+  const liveEnvironmentIds = new Set(
+    statusEnvironmentIds.filter((_, index) => shellStatuses[index] === "live"),
+  );
+  const conversationCounts = { "needs-you": 0, running: 0, unknown: 0 };
+  const matchingThreadKeys = new Set<string>();
+  let selectedOutsideLens = false;
+  if (pinnedStatusEnabled) {
+    for (const thread of partition.visibleThreads) {
+      const activity = conversationActivity(thread, liveEnvironmentIds.has(thread.environmentId));
+      if (activity !== "idle") conversationCounts[activity]++;
+      if (lens !== "all") {
+        const key = threadShellKey(thread);
+        if (activity === lens) matchingThreadKeys.add(key);
+        else if (key === routeRowThreadKey) selectedOutsideLens = true;
+      }
+    }
+  }
+  const filterForLens = (list: readonly EnvironmentThreadShell[]) =>
+    lens === "all"
+      ? list
+      : list.filter((thread) => {
+          const key = threadShellKey(thread);
+          return matchingThreadKeys.has(key) || key === routeRowThreadKey;
+        });
   // With no pinned threads there is nothing to hide and no header to re-expand,
   // so a stale collapsed flag must not block dragging a thread into the empty boundary.
   const pinnedShelfDropAllowed = pinnedShelfExpanded || pinnedThreads.length === 0;
@@ -545,13 +640,13 @@ function useSidebarThreads(input: {
     return visible.length === settledThreads.length ? settledThreads : visible;
   })();
   const renderedSettledThreads = settledShelfExpanded
-    ? visibleSettledThreads
+    ? filterForLens(visibleSettledThreads)
     : routeThreadOnly(visibleSettledThreads, shelfRouteThreadKey);
   const visibleSnoozedThreads = snoozedShelfExpanded
-    ? snoozedThreads
+    ? filterForLens(snoozedThreads)
     : routeThreadOnly(snoozedThreads, shelfRouteThreadKey);
   const visibleWorkingThreads = workingShelfExpanded
-    ? workingThreads
+    ? filterForLens(workingThreads)
     : routeThreadOnly(workingThreads, routeRowThreadKey);
   const visiblePinnedThreads = resolvePinnedSidebarVisibleThreads({
     threads: pinnedThreads,
@@ -562,36 +657,64 @@ function useSidebarThreads(input: {
     getLocalLastVisitedAt: (thread) => localLastVisitedAtById?.[threadShellKey(thread)],
   });
   const visibleActiveThreads = idleShelfExpanded
-    ? activeThreads
+    ? filterForLens(activeThreads)
     : routeThreadOnly(activeThreads, routeRowThreadKey);
+  const groupedActive =
+    hermesHomeStates.length === 0
+      ? { coding: activeThreads, hermes: [] }
+      : groupConversationsByHome(
+          activeThreads,
+          hermesHomeStates.map((state) => state.home),
+        );
+  const hermesHomes = groupedActive.hermes.map(({ home, conversations }) => {
+    const key = conversationHomeKey(home.environmentId, home.instanceId);
+    const collapsed = collapsedHomeKeys.includes(key);
+    return {
+      home,
+      key,
+      collapsed,
+      conversations,
+      threads: collapsed
+        ? routeThreadOnly(conversations, routeRowThreadKey)
+        : filterForLens(conversations),
+    };
+  });
   const projectFolders =
     folderGroups === null
       ? null
-      : groupSidebarThreadsByProject(folderGroups, activeThreads, keepEmpty).map((folder) => {
-          const collapsed = !resolveProjectExpanded(
-            projectExpandedById,
-            sidebarFolderExpansionKeys(folder.group),
-          );
-          return {
-            group: folder.group,
-            collapsed,
-            // A closed folder still shows the open thread, and hints at the rest.
-            threads: collapsed
-              ? routeThreadOnly(folder.threads, routeRowThreadKey)
-              : folder.threads,
-            hiddenThreads: collapsed
-              ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
-              : EMPTY_THREADS,
-          };
-        });
-  const orderedThreads = [
-    ...visiblePinnedThreads,
+      : groupSidebarThreadsByProject(folderGroups, groupedActive.coding, keepEmpty).map(
+          (folder) => {
+            const collapsed = !resolveProjectExpanded(
+              projectExpandedById,
+              sidebarFolderExpansionKeys(folder.group),
+            );
+            return {
+              group: folder.group,
+              collapsed,
+              // A closed folder still shows the open thread, and hints at the rest.
+              threads: collapsed
+                ? routeThreadOnly(folder.threads, routeRowThreadKey)
+                : filterForLens(folder.threads),
+              hiddenThreads: collapsed
+                ? filterForLens(folder.threads).filter(
+                    (thread) => threadShellKey(thread) !== routeRowThreadKey,
+                  )
+                : EMPTY_THREADS,
+            };
+          },
+        );
+  const afterHermesThreads = [
     ...(projectFolders === null
       ? visibleActiveThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
+  ];
+  const orderedThreads = [
+    ...visiblePinnedThreads,
+    ...hermesHomes.flatMap((group) => group.threads),
+    ...afterHermesThreads,
   ];
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const [list, section] of [
@@ -608,6 +731,15 @@ function useSidebarThreads(input: {
     threads,
     workingShelfEnabled,
     pinnedStatusEnabled,
+
+    conversationCounts,
+    selectedOutsideLens,
+    hermesHomes,
+    hermesHomeStates,
+    toggleHermesHome: (key: string) =>
+      setCollapsedHomeKeys((keys) =>
+        keys.includes(key) ? keys.filter((value) => value !== key) : [...keys, key],
+      ),
     searchableThreads: [
       ...pinnedThreads,
       ...activeThreads,
@@ -648,6 +780,7 @@ function useSidebarThreads(input: {
     visiblePinnedThreads,
     visibleActiveThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
+    afterHermesThreads,
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
     settledThreadKeys: new Set(settledThreads.map(threadShellKey)),
     snoozedThreadKeys: new Set(snoozedThreads.map(threadShellKey)),
@@ -1034,6 +1167,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const boringSidebarEnabled = useClientSettings((settings) => settings.boringSidebarEnabled);
+  const [conversationLens, setConversationLens] = useState<ConversationLens>("all");
+  const conversationOrganizationEnabled = useClientSettings(
+    (settings) => settings.sidebarPinnedStatusEnabled,
+  );
+  const { openScratchProject } = useScratchProject();
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -1072,6 +1210,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const taskEnvironmentIds = conversationOrganizationEnabled ? connectedEnvironmentIds : [];
+  const scheduledTaskResults = useAtomValue(
+    scheduledTasksListAtom(environmentIdsKey(taskEnvironmentIds)),
+  );
+  const scheduledTaskBindings = indexScheduledTaskBindings(
+    taskEnvironmentIds.map((environmentId, index) => [
+      environmentId,
+      AsyncResult.getOrElse(scheduledTaskResults[index]!, () => null)?.tasks ?? [],
+    ]),
+  );
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const [renamingThreadRef, setRenamingThreadRef] = useState<ScopedThreadRef | null>(null);
@@ -1168,6 +1316,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? null
       : scopedThreadKey(resolveListedAncestorThreadRef(routeThreadRef, threads));
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  const activeConversationLens = conversationOrganizationEnabled ? conversationLens : "all";
   // The open draft's first send names its thread in place; a finalized draft reached by
   // navigation resolves through its redirect instead, and still reveals.
   const routeKeyInPlace = routeDraftThread?.promotedTo != null;
@@ -1361,6 +1510,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const {
     workingShelfEnabled,
     pinnedStatusEnabled,
+    conversationCounts,
+    selectedOutsideLens,
+    hermesHomes,
+    hermesHomeStates,
+    toggleHermesHome,
     pinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
@@ -1395,6 +1549,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     visiblePinnedThreads,
     visibleActiveThreads,
     orderedThreadKeys,
+    afterHermesThreads,
     threadByKey,
     settledThreadKeys,
     snoozedThreadKeys,
@@ -1410,17 +1565,70 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     connectedEnvironmentIds,
     optimisticDrop,
     threads: listedThreads,
+    lens: activeConversationLens,
     delegatedUnderParent,
     routeRowThreadKey,
     departingThreadKey,
-    folderGroups: boringSidebarEnabled
-      ? scopedProjectGroups.length === 0
-        ? // An archived project keeps a folder for its active threads, below the rest.
-          [...scopeGroups, ...projectGroups.filter((project) => project.archived)]
-        : scopedProjectGroups
-      : null,
+    folderGroups:
+      boringSidebarEnabled || conversationOrganizationEnabled
+        ? scopedProjectGroups.length === 0
+          ? // An archived project keeps a folder for its active threads, below the rest.
+            [...scopeGroups, ...projectGroups.filter((project) => project.archived)]
+          : scopedProjectGroups
+        : null,
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
+  });
+
+  const startHermesConversation = useStableCallback(async (home: HermesConversationHome) => {
+    const state = hermesHomeStates.find(
+      (candidate) =>
+        candidate.home.environmentId === home.environmentId &&
+        candidate.home.instanceId === home.instanceId,
+    );
+    if (
+      state?.modelSelection == null ||
+      !home.enabled ||
+      !state.isLive ||
+      !connectedEnvironmentIds.includes(home.environmentId) ||
+      !readEnvironmentScope(home.environmentId, AuthOrchestrationOperateScope)
+    )
+      return;
+    try {
+      const project = await openScratchProject(home.environmentId);
+      if (project === null) return;
+      const currentState = appAtomRegistry
+        .get(sidebarHermesHomeStatesAtom)
+        .find(
+          (candidate) =>
+            candidate.home.environmentId === home.environmentId &&
+            candidate.home.instanceId === home.instanceId,
+        );
+      if (
+        currentState?.modelSelection == null ||
+        !currentState.home.enabled ||
+        !currentState.isLive ||
+        !appAtomRegistry
+          .get(environmentSummaries.connectedEnvironmentIdsAtom)
+          .includes(home.environmentId) ||
+        !readEnvironmentScope(home.environmentId, AuthOrchestrationOperateScope)
+      )
+        return;
+      await handleNewThread(scopeProjectRef(project.environmentId, project.id), {
+        modelSelectionOverride: currentState.modelSelection,
+        providerDraftScope: {
+          environmentId: home.environmentId,
+          providerInstanceId: home.instanceId,
+        },
+      });
+      if (isMobile) setOpenMobile(false);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: gt("Could not start conversation"),
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -1507,11 +1715,86 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     routeDraftIdForRows,
     draftTerminalLabels,
   );
-  // Draft rows sit above the threads, so jumps and traversal reach them first.
-  // Search hides them, so they drop out while it is open.
-  const listedDraftIds = isSearchingThreads ? EMPTY_DRAFT_IDS : draftIds;
-  const draftIdByRowKey = new Map<string, DraftId>(listedDraftIds.map((id) => [`draft:${id}`, id]));
-  const orderedRowKeys = [...draftIdByRowKey.keys(), ...orderedThreadKeys];
+
+  const draftEnvironments = useComposerDraftStore(
+    useShallow((store) =>
+      pinnedStatusEnabled
+        ? Object.fromEntries(
+            draftIds.map((draftId) => [
+              draftId,
+              store.draftThreadsByThreadKey[draftId]?.environmentId,
+            ]),
+          )
+        : null,
+    ),
+  );
+  const draftProviders = useComposerDraftStore(
+    useShallow((store) =>
+      pinnedStatusEnabled
+        ? Object.fromEntries(
+            draftIds.map((draftId) => [
+              draftId,
+              store.draftsByThreadKey[draftId]?.activeProvider ?? null,
+            ]),
+          )
+        : null,
+    ),
+  );
+  const lensDraftIds =
+    activeConversationLens === "all"
+      ? draftIds
+      : draftIds.filter((id) => id === routeDraftIdForRows);
+  const groupedDrafts = groupConversationsByHome(
+    lensDraftIds.flatMap((draftId) => {
+      const environmentId = draftEnvironments?.[draftId];
+      return environmentId === undefined
+        ? []
+        : [
+            {
+              draftId,
+              environmentId,
+              providerInstanceId:
+                draftProviders?.[draftId] ?? NO_PROVIDER_MODEL_SELECTION.instanceId,
+            },
+          ];
+    }),
+    hermesHomeStates.map((state) => state.home),
+  );
+  const codingDraftIds = pinnedStatusEnabled
+    ? groupedDrafts.coding.map((draft) => draft.draftId)
+    : draftIds;
+  const hermesHomesWithDrafts = hermesHomes.map((group) => {
+    const drafts =
+      groupedDrafts.hermes.find(
+        ({ home }) => conversationHomeKey(home.environmentId, home.instanceId) === group.key,
+      )?.conversations ?? [];
+    return {
+      ...group,
+      draftCount: drafts.length,
+      draftIds: drafts
+        .filter((draft) => !group.collapsed || draft.draftId === routeDraftIdForRows)
+        .map((draft) => draft.draftId),
+    };
+  });
+  const listedDraftIds = isSearchingThreads
+    ? EMPTY_DRAFT_IDS
+    : [...codingDraftIds, ...hermesHomesWithDrafts.flatMap((group) => group.draftIds)];
+  const draftRowKey = (id: DraftId) => `draft:${id}`;
+  const draftIdByRowKey = new Map<string, DraftId>(
+    listedDraftIds.map((id) => [draftRowKey(id), id]),
+  );
+  const orderedRowKeys =
+    isSearchingThreads || !pinnedStatusEnabled
+      ? [...draftIdByRowKey.keys(), ...orderedThreadKeys]
+      : [
+          ...codingDraftIds.map(draftRowKey),
+          ...visiblePinnedThreads.map(threadShellKey),
+          ...hermesHomesWithDrafts.flatMap((group) => [
+            ...group.draftIds.map(draftRowKey),
+            ...group.threads.map(threadShellKey),
+          ]),
+          ...afterHermesThreads.map(threadShellKey),
+        ];
   const routeDraftRowKey = `draft:${routeDraftIdForRows}`;
   const routeRowKey = draftIdByRowKey.has(routeDraftRowKey) ? routeDraftRowKey : routeRowThreadKey;
 
@@ -2036,6 +2319,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
     if (
       !hasProjectFolders &&
+      hermesHomes.length === 0 &&
       pinnedThreads.length +
         activeThreads.length +
         workingThreads.length +
@@ -3386,6 +3670,50 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
             />
+            {pinnedStatusEnabled && !isSearchingThreads ? (
+              <div className="space-y-1 px-2 pb-2">
+                <div
+                  role="group"
+                  aria-label={gt("Filter loaded conversations")}
+                  className="flex flex-wrap gap-1"
+                >
+                  {(
+                    [
+                      ["all", gt("All"), null],
+                      ["needs-you", gt("Needs you"), conversationCounts["needs-you"]],
+                      ["running", gt("Running"), conversationCounts.running],
+                    ] as const
+                  ).map(([lens, label, count]) => (
+                    <Button
+                      key={lens}
+                      aria-pressed={activeConversationLens === lens}
+                      size="compact"
+                      variant={activeConversationLens === lens ? "secondary" : "ghost"}
+                      onClick={() => setConversationLens(lens)}
+                    >
+                      {label}
+                      {count !== null ? (
+                        <span className="text-muted-foreground tabular-nums">{count}</span>
+                      ) : null}
+                    </Button>
+                  ))}
+                </div>
+                {conversationCounts.unknown > 0 ? (
+                  <p className="px-1 text-xs text-muted-foreground">
+                    {gt(
+                      "{count, plural, one {Status not checked for # loaded conversation} other {Status not checked for # loaded conversations}}",
+                      { count: conversationCounts.unknown },
+                    )}
+                  </p>
+                ) : null}
+                {selectedOutsideLens ||
+                (activeConversationLens !== "all" && routeDraftIdForRows !== null) ? (
+                  <p className="px-1 text-xs text-muted-foreground">
+                    {gt("The open conversation stays visible outside the filter.")}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </SidebarGroup>
         }
       >
@@ -3577,17 +3905,33 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           : isCard
                             ? "card"
                             : "slim";
+                        const bindings = scheduledTaskBindings
+                          .get(thread.environmentId)
+                          ?.get(thread.id);
+                        const task = bindings?.[0];
+                        const triggerCount = bindings?.length ?? 0;
+                        const scheduleTriggerLabel = !task
+                          ? undefined
+                          : triggerCount > 1
+                            ? gt("{count, plural, one {# task trigger} other {# task triggers}}", {
+                                count: triggerCount,
+                              })
+                            : task.schedule.type === "webhook"
+                              ? gt("Webhook: {title}", { title: task.title })
+                              : gt("Schedule: {title}", { title: task.title });
                         return (
                           <SortableThreadRow
                             key={threadKey}
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
                             sortableDisabled={
+                              activeConversationLens !== "all" ||
                               renamingThreadKey === threadKey ||
                               !draggableThreadKeys.has(threadKey) ||
                               optimisticDrop !== null
                             }
                             thread={thread}
+                            scheduleTriggerLabel={scheduleTriggerLabel}
                             variant={rowVariant}
                             navigationParent={
                               folderRow ??
@@ -3680,10 +4024,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
-                      const items: ReactNode[] = [
+                      const renderDrafts = (ids: readonly DraftId[], hermesHomeRowId?: string) => (
                         <SidebarDraftBlock
-                          key="draft-sessions"
-                          draftIds={draftIds}
+                          key={`draft-sessions:${hermesHomeRowId ?? "coding"}`}
+                          draftIds={ids}
+                          showProject={hermesHomeRowId === undefined}
+                          navigationParent={hermesHomeRowId}
                           routeDraftComposer={routeDraftComposer}
                           terminalLabels={draftTerminalLabels}
                           jumpLabelByDraftId={draftJumpLabelById}
@@ -3692,8 +4038,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           routeDraftId={routeDraftIdForRows}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
-                        />,
-                      ];
+                        />
+                      );
+                      const items: ReactNode[] = [renderDrafts(codingDraftIds)];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           // Folders draw active rows in their own place below.
@@ -3702,6 +4049,62 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
+                          for (const group of hermesHomesWithDrafts) {
+                            const rowId = `hermes:${group.key}`;
+                            const state = hermesHomeStates.find(
+                              (entry) =>
+                                conversationHomeKey(
+                                  entry.home.environmentId,
+                                  entry.home.instanceId,
+                                ) === group.key,
+                            );
+                            const isLive = state?.isLive === true;
+                            const availability = !group.home.enabled
+                              ? "disabled"
+                              : !connectedEnvironmentIds.includes(group.home.environmentId)
+                                ? "offline"
+                                : !isLive
+                                  ? "checking"
+                                  : state?.modelSelection == null
+                                    ? "unavailable"
+                                    : "ready";
+                            items.push(
+                              <SidebarHermesHome
+                                key={rowId}
+                                rowId={rowId}
+                                home={group.home}
+                                collapsed={group.collapsed}
+                                loadedCount={group.conversations.length + group.draftCount}
+                                attentionCount={
+                                  isLive
+                                    ? group.conversations.filter(
+                                        (thread) =>
+                                          conversationActivity(thread, true) === "needs-you",
+                                      ).length
+                                    : 0
+                                }
+                                unknownCount={isLive ? 0 : group.conversations.length}
+                                availability={availability}
+                                onToggle={() => toggleHermesHome(group.key)}
+                                onNewConversation={() => void startHermesConversation(group.home)}
+                              />,
+                            );
+                            if (group.draftIds.length > 0)
+                              items.push(renderDrafts(group.draftIds, rowId));
+                            for (const thread of group.threads) {
+                              items.push(renderThreadRow(thread, "active", rowId));
+                            }
+                          }
+                          if (pinnedStatusEnabled) {
+                            items.push(
+                              <li
+                                key="coding-projects-heading"
+                                className="mt-3 list-none px-(--sidebar-row-content-inset) py-1 text-sm font-medium text-sidebar-muted-foreground"
+                              >
+                                {gt("Coding projects")}
+                              </li>,
+                            );
+                          }
                           for (const folder of projectFolders) {
                             items.push(
                               <SidebarProjectFolderHeader

@@ -49,6 +49,7 @@ import {
   appendComposerDraftAttachments,
   type ComposerDraftInsertion,
   type ComposerDraftWorkspaceSelection,
+  type ComposerDraft,
   composerDraftsLoadedAtom,
   createNewTaskDraft,
   getComposerDraftSnapshot,
@@ -184,6 +185,7 @@ type NewTaskFlowContextValue = {
   readonly isScratchDraft: boolean;
   readonly modelOptions: ReadonlyArray<ModelOption>;
   readonly selectedModel: ModelSelection | null;
+  readonly providerScope: ComposerDraft["providerScope"];
   readonly selectedModelOption: ModelOption | null;
   readonly selectedProviderStatus: ServerProvider | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
@@ -378,6 +380,7 @@ export function NewTaskFlowProvider(
           : null;
   const activeNewTask = props.active === false ? null : { pendingKey: activePendingKey };
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
+  const providerScope = selectedProjectDraft.providerScope;
   const prompt = selectedProjectDraft.text;
   const attachments = selectedProjectDraft.attachments;
   const projectGitStatus = useEnvironmentQuery(
@@ -485,18 +488,20 @@ export function NewTaskFlowProvider(
     stickySelection: stickyModelSelection,
     modelOptions,
   });
-  const selectedModel = resolveNewThreadModelSelection({
-    defaultSelection: selectedDefaultModel,
-    explicitSelection:
-      draftModelSelection ?? (projectDefaultModelSelection ? null : stickyModelSelection),
-    fallbackSelection: selectedEnvironmentServerConfig?.settings.fallbackModelSelection ?? null,
-    providers: selectedEnvironmentServerConfig?.providers ?? [],
-    ...(selectedEnvironmentServerConfig
-      ? { settings: selectedEnvironmentServerConfig.settings }
-      : {}),
-    projectId: selectedProject?.id ?? null,
-    now: modelSelectionNow,
-  }).selection;
+  const selectedModel = providerScope
+    ? (selectedProjectDraft.modelSelection ?? null)
+    : resolveNewThreadModelSelection({
+        defaultSelection: selectedDefaultModel,
+        explicitSelection:
+          draftModelSelection ?? (projectDefaultModelSelection ? null : stickyModelSelection),
+        fallbackSelection: selectedEnvironmentServerConfig?.settings.fallbackModelSelection ?? null,
+        providers: selectedEnvironmentServerConfig?.providers ?? [],
+        ...(selectedEnvironmentServerConfig
+          ? { settings: selectedEnvironmentServerConfig.settings }
+          : {}),
+        projectId: selectedProject?.id ?? null,
+        now: modelSelectionNow,
+      }).selection;
   const selectedModelKey = selectedModel
     ? `${selectedModel.instanceId}:${selectedModel.model}`
     : null;
@@ -526,8 +531,9 @@ export function NewTaskFlowProvider(
     const selection = withRememberedModelOptions(
       options ? { ...option.selection, options } : option.selection,
     );
+    if (providerScope && selection.instanceId !== providerScope.instanceId) return;
     updateComposerDraftSettings(selectedProjectDraftKey, { modelSelection: selection });
-    setStickyComposerModelSelection(selection);
+    if (!providerScope) setStickyComposerModelSelection(selection);
   };
   const setSelectedModelOptions = (options: ReadonlyArray<ProviderOptionSelection> | undefined) => {
     if (!selectedModel || !selectedProjectDraftKey) {
@@ -543,7 +549,7 @@ export function NewTaskFlowProvider(
     updateComposerDraftSettings(selectedProjectDraftKey, {
       modelSelection: nextSelection,
     });
-    setStickyComposerModelSelection(nextSelection);
+    if (!providerScope) setStickyComposerModelSelection(nextSelection);
   };
 
   const providerGroups = groupByProvider(modelOptions);
@@ -792,12 +798,16 @@ export function NewTaskFlowProvider(
     }
     const draft = getComposerDraftSnapshot(selectedProjectDraftKey);
     const text = draft.text.trim();
-    const draftModelSelection =
-      resolveSelectableModelSelection(
-        selectedEnvironmentServerConfig,
-        draft.modelSelection ?? null,
-        selectedProject.id,
-      ) ?? selectedModel;
+    const draftModelSelection = draft.providerScope
+      ? draft.providerScope.environmentId === selectedProject.environmentId &&
+        draft.modelSelection?.instanceId === draft.providerScope.instanceId
+        ? draft.modelSelection
+        : null
+      : (resolveSelectableModelSelection(
+          selectedEnvironmentServerConfig,
+          draft.modelSelection ?? null,
+          selectedProject.id,
+        ) ?? selectedModel);
     if ((text.length === 0 && draft.attachments.length === 0) || !draftModelSelection) {
       return null;
     }
@@ -948,6 +958,7 @@ export function NewTaskFlowProvider(
     isScratchDraft,
     modelOptions,
     selectedModel,
+    providerScope,
     selectedModelOption,
     selectedProviderStatus,
     providerGroups,

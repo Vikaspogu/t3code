@@ -1,8 +1,18 @@
+import { useAtomValue } from "@effect/atom-react";
 import * as Dialog from "../../components/ui/Dialog";
+import { isHermesProviderUnavailable } from "../../lib/modelOptions";
+import {
+  resolveConversationProviderDriver,
+  resolveConversationRequestProvider,
+} from "@t3tools/client-runtime/state/conversation-organization";
+import { sidebarPinnedStatusEnabledAtom } from "../../state/preferences";
+import type { RuntimeRequestId } from "@t3tools/contracts";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentServerConfigsAtom } from "../../state/server";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { useRememberThreadProject } from "./useRememberThreadProject";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
-import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
+import { makeQueuedMessageMetadata, makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTurn";
 import { useWorktreeSetup } from "./use-worktree-setup";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -43,7 +53,7 @@ import {
 } from "@t3tools/shared/projectScripts";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useConnectionsReady } from "../../state/workspace";
-import { useEnvironmentShellReadiness } from "../../state/shell";
+import { environmentShell, useEnvironmentShellReadiness } from "../../state/shell";
 import { restoredNewTaskDraftKey } from "../../state/new-task-draft-key";
 import { clearPendingThreadCreationOutcome } from "../../state/pending-thread-creation";
 import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draft";
@@ -524,6 +534,9 @@ function ThreadRouteContent(
     if (previewTarget) revealPreview();
   }, [previewTarget]);
   const routeEnvironmentRuntime = useRemoteEnvironmentRuntime(environmentId);
+  const liveShell = useEnvironmentShellReadiness(selectedThread?.environmentId ?? null);
+  const providerConfigs = useAtomValue(environmentServerConfigsAtom);
+  const sidebarPinnedStatusEnabled = useAtomValue(sidebarPinnedStatusEnabledAtom);
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
   const routeConnectionError = routeEnvironmentRuntime
@@ -683,6 +696,66 @@ function ThreadRouteContent(
           ],
         };
 
+  const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
+  const threadInstanceId = selectedThread?.modelSelection.instanceId;
+  const currentInstanceId = composer.modelSelection?.instanceId ?? threadInstanceId;
+  const providerUnavailableLabel = gt("Provider unavailable");
+  const isProviderUnavailable = (
+    instanceId: typeof threadInstanceId,
+    driver = resolveConversationProviderDriver(selectedThreadDetail, instanceId),
+  ) =>
+    sidebarPinnedStatusEnabled &&
+    selectedThread !== null &&
+    instanceId !== undefined &&
+    isHermesProviderUnavailable(
+      providerConfigs.get(selectedThread.environmentId) ??
+        (selectedThread.environmentId === environmentId ? serverConfig : null),
+      instanceId,
+      selectedThread.projectId,
+      liveShell.status === "live",
+      driver,
+    );
+  const providerUnavailable = isProviderUnavailable(currentInstanceId);
+  const requestProviderUnavailable =
+    sidebarPinnedStatusEnabled &&
+    [requests.activePendingApproval?.requestId, requests.activePendingUserInput?.requestId].some(
+      (requestId) => {
+        if (!requestId) return false;
+        const target = resolveConversationRequestProvider(selectedThreadDetail, requestId);
+        return (
+          target === undefined ||
+          (target !== null && isProviderUnavailable(target.providerInstanceId, target.driver))
+        );
+      },
+    );
+  const blockUnavailableProvider = (
+    instanceId: typeof threadInstanceId,
+    driver = resolveConversationProviderDriver(selectedThreadDetail, instanceId),
+  ) => {
+    if (!appAtomRegistry.get(sidebarPinnedStatusEnabledAtom) || !selectedThread || !instanceId) {
+      return false;
+    }
+    const targetEnvironmentId = selectedThread.environmentId;
+    const blocked = isHermesProviderUnavailable(
+      appAtomRegistry.get(environmentServerConfigsAtom).get(targetEnvironmentId) ??
+        (targetEnvironmentId === environmentId ? serverConfig : null),
+      instanceId,
+      selectedThread.projectId,
+      appAtomRegistry.get(environmentShell.statusAtom(targetEnvironmentId)) === "live",
+      driver,
+    );
+    if (blocked) Dialog.alert(providerUnavailableLabel);
+    return blocked;
+  };
+  const blockUnavailableRequest = (requestId: RuntimeRequestId | undefined) => {
+    if (!requestId || !appAtomRegistry.get(sidebarPinnedStatusEnabledAtom)) return false;
+    const target = resolveConversationRequestProvider(selectedThreadDetail, requestId);
+    if (target === undefined) {
+      Dialog.alert(providerUnavailableLabel);
+      return true;
+    }
+    return target !== null && blockUnavailableProvider(target.providerInstanceId, target.driver);
+  };
   const handleOpenConnectionEditor = () => {
     void navigation.navigate("Connections");
   };
@@ -704,7 +777,8 @@ function ThreadRouteContent(
   };
 
   const handleResumeQueue = async () => {
-    if (!selectedThread) return;
+    if (!selectedThread || blockUnavailableProvider(currentInstanceId)) return;
+    const metadata = makeQueuedMessageMetadata();
     const result = await resumeThread({
       thread: selectedThread,
       resumableRunId: composer.resumableRunId,
@@ -712,8 +786,8 @@ function ThreadRouteContent(
       runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
       interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
       modelSelection: composer.modelSelection,
-      messageId: MessageId.make(uuidv4()),
-      createdAt: new Date().toISOString(),
+      messageId: MessageId.make(metadata.messageId),
+      createdAt: metadata.createdAt,
       setRuntimeMode: setThreadRuntimeMode,
       setInteractionMode: setThreadInteractionMode,
       startTurn: continueThreadRun,
@@ -908,6 +982,7 @@ function ThreadRouteContent(
   const localResendBusy = useRef(false);
   const setupMessage = selectedThreadDetail?.messages.find((message) => message.role === "user");
   const handleWorkLocally = async () => {
+    if (blockUnavailableProvider(threadInstanceId)) return;
     if (!selectedThread || !selectedThreadProject || !setupMessage || localResendBusy.current)
       return;
     localResendBusy.current = true;
@@ -1027,7 +1102,6 @@ function ThreadRouteContent(
     );
   }
 
-  const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = () => (
     <>
       <GitActionProgressOverlay
@@ -1052,6 +1126,10 @@ function ThreadRouteContent(
             )
           }
           canOperateThread={canOperateThread}
+          providerUnavailableReason={providerUnavailable ? providerUnavailableLabel : null}
+          requestProviderUnavailableReason={
+            requestProviderUnavailable ? providerUnavailableLabel : null
+          }
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           selectedThreadDetailRef={selectedThreadDetailRef}
           contentPresentation={contentPresentation}
@@ -1128,16 +1206,35 @@ function ThreadRouteContent(
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
-          onResumeQueue={composer.canResume ? handleResumeQueue : null}
-          onSendMessage={composer.onSendMessage}
+          onResumeQueue={composer.canResume && !providerUnavailable ? handleResumeQueue : null}
+          onSendMessage={(...args) =>
+            blockUnavailableProvider(currentInstanceId) ||
+            requests.activePendingApprovals.some((approval) =>
+              blockUnavailableRequest(approval.requestId),
+            )
+              ? Promise.resolve(null)
+              : composer.onSendMessage(...args)
+          }
           offersSideChat={composer.sideChatUnavailableReason === null}
-          onSendCommand={composer.onSendCommand}
+          onSendCommand={(...args) =>
+            blockUnavailableProvider(threadInstanceId)
+              ? Promise.resolve(null)
+              : composer.onSendCommand(...args)
+          }
           onReconnectEnvironment={handleReconnectEnvironment}
           canSwitchThreadProvider={composer.canSwitchThreadProvider}
-          onRespondToApproval={requests.onRespondToApproval}
+          onRespondToApproval={(requestId, decision) =>
+            blockUnavailableRequest(requestId)
+              ? Promise.resolve(undefined)
+              : requests.onRespondToApproval(requestId, decision)
+          }
           onSelectUserInputOption={requests.onSelectUserInputOption}
           onChangeUserInputCustomAnswer={requests.onChangeUserInputCustomAnswer}
-          onSubmitUserInput={requests.onSubmitUserInput}
+          onSubmitUserInput={() =>
+            blockUnavailableRequest(requests.activePendingUserInput?.requestId)
+              ? Promise.resolve(undefined)
+              : requests.onSubmitUserInput()
+          }
           onDismissUserInput={requests.onDismissUserInput}
         />
       </>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -14,8 +15,11 @@ import {
   buildModelOptions,
   describeUnavailableModelSelection,
   groupByProvider,
+  isHermesProviderUnavailable,
   isModelSelectionUnavailable,
+  isScopedHermesDraftReady,
   resolveDefaultableModelSelection,
+  resolveHermesHomeModel,
   resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
   withStoredThreadModelOptions,
@@ -24,6 +28,92 @@ import {
 import { groupModelsBySubProvider } from "@t3tools/client-runtime/providerSubProviders";
 
 describe("mobile model options", () => {
+  it("selects only the requested attached Hermes instance and respects scratch overrides", () => {
+    const instanceId = ProviderInstanceId.make("hermes-dev");
+    const otherId = ProviderInstanceId.make("hermes-prod");
+    const scratchId = ProjectId.make("scratch");
+    const instance = { driver: ProviderDriverKind.make("hermes"), enabled: true };
+    const provider = {
+      instanceId,
+      driver: "hermes",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+      models: [{ slug: "general", isDefault: true, isCustom: false }],
+    };
+    const config = {
+      providers: [{ ...provider, instanceId: otherId }, provider],
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: { [instanceId]: instance, [otherId]: instance },
+        projectSettingsOverrides: {
+          [scratchId]: { providerInstances: { [instanceId]: { enabled: false } } },
+        },
+      },
+    } as unknown as ServerConfig;
+    expect(resolveHermesHomeModel(config, instanceId, null, true)).toEqual({
+      instanceId,
+      model: "general",
+    });
+    expect(resolveHermesHomeModel(config, instanceId, scratchId, true)).toBeNull();
+    expect(isHermesProviderUnavailable(config, instanceId, null, true)).toBe(false);
+    expect(isHermesProviderUnavailable(config, instanceId, null, false)).toBe(true);
+    expect(isHermesProviderUnavailable(config, instanceId, scratchId, true)).toBe(true);
+    expect(isHermesProviderUnavailable(config, ProviderInstanceId.make("codex"), null, false)).toBe(
+      false,
+    );
+    expect(
+      isHermesProviderUnavailable(
+        { ...config, settings: DEFAULT_SERVER_SETTINGS },
+        instanceId,
+        null,
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      resolveHermesHomeModel(
+        { ...config, providers: config.providers.slice(0, 1) },
+        instanceId,
+        null,
+        true,
+      ),
+    ).toBeNull();
+    expect(
+      resolveHermesHomeModel(
+        {
+          ...config,
+          settings: { ...config.settings, providerInstances: { [otherId]: instance } },
+        },
+        instanceId,
+        null,
+        true,
+      ),
+    ).toBeNull();
+    const environmentId = EnvironmentId.make("work");
+    const project = { environmentId, id: ProjectId.make("other-scratch") };
+    const scope = { environmentId, instanceId };
+    const selection = { instanceId, model: "general" };
+    expect(resolveHermesHomeModel(config, instanceId, null, false)).toBeNull();
+    expect(isScopedHermesDraftReady(config, project, scope, selection, true)).toBe(true);
+    expect(isScopedHermesDraftReady(config, project, scope, selection, false)).toBe(false);
+    expect(
+      isScopedHermesDraftReady(config, { ...project, id: scratchId }, scope, selection, true),
+    ).toBe(false);
+    expect(
+      isScopedHermesDraftReady(
+        config,
+        project,
+        { ...scope, environmentId: EnvironmentId.make("other") },
+        selection,
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      isScopedHermesDraftReady(config, project, scope, { ...selection, instanceId: otherId }, true),
+    ).toBe(false);
+    expect(isHermesProviderUnavailable(config, otherId, scratchId, true)).toBe(false);
+  });
   it("distinguishes same-name OpenCode models without changing their routing", () => {
     const sources = [
       { id: "anthropic", label: "Anthropic" },

@@ -387,6 +387,66 @@ describe("getThreadListV2OrderedSection", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("keeps pins and selected context visible while applying scoped conversation activity", () => {
+    const instanceId = ProviderInstanceId.make("hermes-shared");
+    const otherEnvironment = EnvironmentId.make("environment-2");
+    const request = makeThread({
+      id: ThreadId.make("request"),
+      title: "Request",
+      providerInstanceId: instanceId,
+      hasPendingApprovals: true,
+    });
+    const stale = { ...request, id: ThreadId.make("stale"), environmentId: otherEnvironment };
+    const coding = makeThread({
+      id: ThreadId.make("coding"),
+      title: "Coding",
+      hasPendingApprovals: true,
+    });
+    const pin = { ...coding, id: ThreadId.make("pin"), pinnedAt: NOW, hasPendingApprovals: false };
+    const threads = [request, stale, coding, pin];
+    const layout = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      selectedThreadKey: `${otherEnvironment}:${stale.id}`,
+      conversation: {
+        homes: [{ environmentId, instanceId, displayName: "Hermes", enabled: false }],
+        homeKey: JSON.stringify([environmentId, instanceId]),
+        lens: "needs-you",
+        liveEnvironmentIds: new Set([environmentId]),
+      },
+    });
+    expect(layout.items.map(({ thread }) => thread.id)).toEqual([pin.id, request.id, stale.id]);
+    expect(layout.conversationCounts).toEqual({ "needs-you": 1, running: 0, unknown: 1 });
+  });
+
+  it("searches across conversation homes and lenses within the selected environment", () => {
+    const instanceId = ProviderInstanceId.make("hermes-shared");
+    const target = makeThread({
+      id: ThreadId.make("digest"),
+      title: "Hermes digest",
+      providerInstanceId: instanceId,
+    });
+    const other = {
+      ...target,
+      id: ThreadId.make("remote"),
+      environmentId: EnvironmentId.make("other"),
+    };
+    const layout = buildThreadListV2Items({
+      threads: [target, other],
+      environmentId,
+      searchQuery: "Hermes digest",
+      now: NOW,
+      conversation: {
+        homes: [{ environmentId, instanceId, displayName: "Hermes", enabled: true }],
+        homeKey: "coding",
+        lens: "needs-you",
+        liveEnvironmentIds: new Set([environmentId]),
+      },
+    });
+    expect(layout.items.map(({ thread }) => thread.id)).toEqual([target.id]);
+  });
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [

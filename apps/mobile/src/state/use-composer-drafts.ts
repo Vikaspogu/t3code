@@ -4,6 +4,7 @@ import { m } from "../i18n/messages";
 import {
   EnvironmentId as EnvironmentIdSchema,
   ModelSelection as ModelSelectionSchema,
+  ProviderInstanceId as ProviderInstanceIdSchema,
   ComposerContextId,
   ComposerContextRecord,
   COMPOSER_CONTEXT_MAX_RECORDS,
@@ -446,6 +447,10 @@ export interface ComposerDraft {
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly importedShareIds?: ReadonlyArray<string>;
   readonly modelSelection?: ModelSelection;
+  readonly providerScope?: {
+    readonly environmentId: EnvironmentId;
+    readonly instanceId: ModelSelection["instanceId"];
+  };
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
   /** `/clear` armed this draft: its next message starts a fresh provider session. */
@@ -524,6 +529,9 @@ const ComposerDraftSchema = Schema.Struct({
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
+  providerScope: Schema.optional(
+    Schema.Struct({ environmentId: EnvironmentIdSchema, instanceId: ProviderInstanceIdSchema }),
+  ),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   freshContext: Schema.optional(Schema.Boolean),
@@ -704,6 +712,7 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.text.length === 0 &&
     draft.attachments.length === 0 &&
     draft.modelSelection === undefined &&
+    draft.providerScope === undefined &&
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
     draft.freshContext !== true &&
@@ -769,6 +778,7 @@ export function decodePersistedComposerState(value: unknown): {
             key,
             isNewTaskDraftKey(key) &&
               draft.modelSelection &&
+              draft.providerScope === undefined &&
               draft.text.length === 0 &&
               draft.attachments.length === 0 &&
               draft.runtimeMode === undefined &&
@@ -1724,6 +1734,7 @@ export function clearComposerDraftContentState(
     importedShareIds: _importedShareIds,
     context: _context,
     modelSelection,
+    providerScope: _providerScope,
     workspaceSelection,
     project: _project,
     ...retained
@@ -1888,6 +1899,7 @@ export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): bool
     a.context === b.context &&
     a.importedShareIds === b.importedShareIds &&
     a.modelSelection === b.modelSelection &&
+    a.providerScope === b.providerScope &&
     a.runtimeMode === b.runtimeMode &&
     a.interactionMode === b.interactionMode &&
     a.freshContext === b.freshContext &&
@@ -2022,10 +2034,27 @@ export function removeComposerDraftsForEnvironment(
   );
 }
 
-export function createNewTaskDraft(project: {
-  readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId;
-}): string {
+export function createNewTaskDraft(
+  project: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+  modelSelection?: ModelSelection,
+): string {
+  if (modelSelection) {
+    const existing = Object.entries(appAtomRegistry.get(composerDraftsAtom)).find(
+      ([key, draft]) =>
+        isNewTaskDraftKey(key) &&
+        draft.providerScope?.environmentId === project.environmentId &&
+        draft.providerScope.instanceId === modelSelection.instanceId &&
+        draft.project?.environmentId === project.environmentId &&
+        draft.project.projectId === project.projectId &&
+        draft.modelSelection?.instanceId === modelSelection.instanceId &&
+        draft.modelSelection.model === modelSelection.model &&
+        draft.modelSelection.options === undefined &&
+        draft.context === undefined &&
+        !draft.importedShareIds?.length &&
+        isEmptyDraft({ ...draft, modelSelection: undefined, providerScope: undefined }),
+    );
+    if (existing) return existing[0];
+  }
   const draftKey = newTaskDraftKey(newDraftId());
   const stamp: ComposerDraftProject = {
     environmentId: project.environmentId,
@@ -2034,7 +2063,19 @@ export function createNewTaskDraft(project: {
   };
   updateComposerDrafts((current) => ({
     ...current,
-    [draftKey]: { ...EMPTY_DRAFT, project: stamp },
+    [draftKey]: {
+      ...EMPTY_DRAFT,
+      project: stamp,
+      ...(modelSelection
+        ? {
+            modelSelection,
+            providerScope: {
+              environmentId: project.environmentId,
+              instanceId: modelSelection.instanceId,
+            },
+          }
+        : {}),
+    },
   }));
   return draftKey;
 }

@@ -100,6 +100,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     attachmentsPromise,
     usesAttachmentUploads,
     readFileBlockReason,
+    readTargetBlockReason,
     buildOutgoingMessageContext,
     isCurrentSend,
     draftChangedDuringPreparation,
@@ -114,6 +115,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     readonly attachmentsPromise: ReturnType<typeof prepareTurnAttachments>;
     readonly usesAttachmentUploads: boolean;
     readonly readFileBlockReason: () => string | null;
+    readonly readTargetBlockReason: (target: MultipleModelTarget) => string | null;
     readonly buildOutgoingMessageContext: (
       attachmentIds: ReadonlyArray<string>,
     ) => ReturnType<typeof buildMessageContext>;
@@ -137,6 +139,10 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
         );
       const fileBlockReason = readFileBlockReason();
       if (fileBlockReason !== null) throw new Error(fileBlockReason);
+      for (const target of targets) {
+        const reason = readTargetBlockReason(target);
+        if (reason !== null) throw new Error(reason);
+      }
       const context = buildOutgoingMessageContext(
         boundAttachmentIds(attachments, attachmentsSnapshot),
       );
