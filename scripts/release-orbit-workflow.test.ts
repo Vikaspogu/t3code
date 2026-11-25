@@ -108,6 +108,7 @@ function apkUpgradeCheck(
     packageName?: string;
     versionCode?: string;
     certificate?: string;
+    certificateFormat?: "legacy" | "v3";
     unsigned?: boolean;
   } = {},
 ) {
@@ -139,7 +140,11 @@ fs.writeFileSync(path.join(args[args.indexOf("--dir") + 1], "baseline-android-ar
       `#!/usr/bin/env node
 const baseline = process.argv.at(-1).endsWith("baseline-android-arm64.apk");
 if (!baseline && process.env.FAKE_UNSIGNED === "1") process.exit(1);
-console.log("Signer #1 certificate SHA-256 digest: " + (baseline ? "a".repeat(64) : process.env.FAKE_CERTIFICATE));
+const prefix = process.env.FAKE_CERTIFICATE_FORMAT === "v3" ? "V3.0 Signer:" : "Signer #1";
+const certificate = baseline ? "a".repeat(64) : process.env.FAKE_CERTIFICATE;
+console.log(prefix + " certificate DN: CN=Orbit Mobile");
+console.log(prefix + " certificate SHA-256 digest: " + certificate);
+console.log(prefix + " certificate SHA-1 digest: " + "b".repeat(40));
 `,
       { mode: 0o700 },
     );
@@ -165,6 +170,7 @@ console.log("package: name='" + (baseline ? "com.t3tools.t3code" : process.env.F
         FAKE_PACKAGE: input.packageName ?? "com.t3tools.t3code",
         FAKE_VERSION: input.versionCode ?? "124",
         FAKE_CERTIFICATE: input.certificate ?? "a".repeat(64),
+        FAKE_CERTIFICATE_FORMAT: input.certificateFormat ?? "legacy",
         FAKE_UNSIGNED: input.unsigned ? "1" : "0",
       },
     });
@@ -177,9 +183,17 @@ it("accepts only an APK that upgrades the prior Orbit package and signing identi
   expect(apkUpgradeCheck().status).toBe(0);
 });
 
+it("accepts current apksigner certificate output", () => {
+  expect(apkUpgradeCheck({ certificateFormat: "v3" }).status).toBe(0);
+});
+
 it.each([
   { name: "another application ID", input: { packageName: "com.t3tools.t3code.dev" } },
   { name: "another signing key", input: { certificate: "b".repeat(64) } },
+  {
+    name: "another signing key in V3 output",
+    input: { certificate: "b".repeat(64), certificateFormat: "v3" },
+  },
   { name: "an unsigned APK", input: { unsigned: true } },
   { name: "the same version code", input: { versionCode: "123" } },
   { name: "a lower version code", input: { versionCode: "122" } },
