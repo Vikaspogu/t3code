@@ -287,7 +287,7 @@ it.each(["failure", "cancelled", "skipped"])(
 it("runs the real native unit-test task before standalone packaging and signing", () => {
   const steps = workflow.jobs.android.steps;
   const unit = steps.findIndex((step) =>
-    step.run?.includes(":t3-agent-notifications:testReleaseUnitTest"),
+    step.run?.includes("./gradlew :t3-agent-notifications:test\n"),
   );
   const build = steps.findIndex((step) => step.run?.includes("assembleRelease"));
   const sign = steps.findIndex((step) => step.name === "Sign APK");
