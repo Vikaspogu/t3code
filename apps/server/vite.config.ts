@@ -99,6 +99,22 @@ export default mergeConfig(
     pack: {
       plugins: [
         {
+          name: "t3code:optional-negotiate-kerberos",
+          transform(code, id) {
+            if (!id.includes("proxy-agent-negotiate/dist/index.js")) return;
+            const staticImport = "kerberos = await import('kerberos');";
+            if (code.split(staticImport).length !== 2) {
+              throw new Error(
+                "Optional kerberos import changed; update the CLI packaging transform.",
+              );
+            }
+            return code.replace(
+              staticImport,
+              "kerberos = await import(/* @vite-ignore */ ['kerberos'].join());",
+            );
+          },
+        },
+        {
           // Every server module reads its version from this manifest import.
           name: "t3code:build-version",
           load(id) {
