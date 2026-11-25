@@ -131,6 +131,7 @@ const setup = Effect.fnUntraced(function* (
     readonly respondNative?: (attempt: number) => Response;
     readonly token?: string;
     readonly initial?: ReadonlyArray<OrchestrationV2ThreadShell>;
+    readonly projectTitle?: string;
     readonly catchUp?: boolean;
     readonly failCatchUpOnce?: boolean;
   } = {},
@@ -270,7 +271,7 @@ const setup = Effect.fnUntraced(function* (
   );
   const project = {
     id: PROJECT_ID,
-    title: "Project",
+    title: options.projectTitle ?? "Project",
     workspaceRoot: "/workspace",
     defaultModelSelection: null,
     scripts: [],
@@ -484,6 +485,55 @@ describe.skipIf(NodeProcess.platform === "win32")("NtfyPublisher UnifiedPush", (
     }).pipe(Effect.scoped),
   );
 
+  it.effect("truncates long native titles without splitting Unicode or losing the deep link", () =>
+    Effect.gen(function* () {
+      const f = yield* nativeFixture;
+      yield* f.writeRegistration();
+      const title = `${"a".repeat(119)}🔔${"b".repeat(20)}`;
+      const h = yield* setup({ env: f.env, initial: [{ ...wait(), title }] });
+      yield* h.rename();
+      const request = h.nativeRequests[0]!;
+      const payload = f.decrypt(request.body);
+      assert.equal(payload.alert_title, "a".repeat(119));
+      assert.equal(payload.alert_path, "/threads/ntfy-environment/ntfy-thread");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "fits multibyte display text into the native payload without losing the deep link",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* nativeFixture;
+        yield* f.writeRegistration();
+        const threadId = ThreadId.make("t".repeat(200));
+        const title = '界"'.repeat(60);
+        const h = yield* setup({
+          env: f.env,
+          projectTitle: "界".repeat(608),
+          initial: [{ ...wait(), id: threadId, title }],
+        });
+        yield* h.rename(threadId);
+        assert.lengthOf(h.nativeRequests, 1);
+        const request = h.nativeRequests[0]!;
+        assert.isAtMost(request.body.length, 3_072);
+        const payload = f.decrypt(request.body);
+        assert.equal(payload.alert_title, title);
+        assert.equal(payload.alert_path, `/threads/ntfy-environment/${threadId}`);
+        assert.isNotEmpty(payload.alert_body);
+      }).pipe(Effect.scoped),
+  );
+  it.effect("suppresses native alerts with oversized deep links", () =>
+    Effect.gen(function* () {
+      const f = yield* nativeFixture;
+      yield* f.writeRegistration();
+      const threadId = ThreadId.make("t".repeat(600));
+      const h = yield* setup({ env: f.env, initial: [{ ...wait(), id: threadId }] });
+      yield* h.rename(threadId);
+      assert.lengthOf(h.nativeRequests, 0);
+      assert.lengthOf(h.publications, 0);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("reports an invalid protected file without logging its path or contents", () => {
     const logs: unknown[] = [];
     const logger = Logger.make(({ message }) => {
@@ -537,10 +587,6 @@ describe.skipIf(NodeProcess.platform === "win32")("NtfyPublisher UnifiedPush", (
       yield* h.rename();
       yield* f.removeRegistration;
       yield* f.writeRegistration();
-      h.shells.set(THREAD_ID, { ...wait(), title: "🔔".repeat(1_000) });
-      yield* h.rename();
-      assert.lengthOf(h.nativeRequests, 0);
-      assert.lengthOf(h.publications, 0);
 
       const unsafeToken = yield* setup({
         env: f.env,

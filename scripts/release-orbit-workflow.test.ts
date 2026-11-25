@@ -187,7 +187,7 @@ it("accepts current apksigner certificate output", () => {
   expect(apkUpgradeCheck({ certificateFormat: "v3" }).status).toBe(0);
 });
 
-it.each([
+it.each<{ name: string; input: Parameters<typeof apkUpgradeCheck>[0] }>([
   { name: "another application ID", input: { packageName: "com.t3tools.t3code.dev" } },
   { name: "another signing key", input: { certificate: "b".repeat(64) } },
   {

@@ -114,6 +114,19 @@ export const readUnifiedPushRegistration = Effect.fnUntraced(function* (
 
 type Registration = Exclude<Effect.Success<ReturnType<typeof readUnifiedPushRegistration>>, string>;
 
+function truncateNativeText(value: string, maxLength: number, maxBytes: number) {
+  const text = value.slice(0, maxLength).replace(/[\uD800-\uDBFF]$/, "");
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const length = Math.ceil((low + high) / 2);
+    const candidate = text.slice(0, length).replace(/[\uD800-\uDBFF]$/, "");
+    if (Buffer.byteLength(JSON.stringify(candidate)) - 2 <= maxBytes) low = length;
+    else high = length - 1;
+  }
+  return text.slice(0, low).replace(/[\uD800-\uDBFF]$/, "");
+}
+
 export function makeUnifiedPushRequest(input: {
   registration: Registration;
   token: Redacted.Redacted<string>;
@@ -129,22 +142,31 @@ export function makeUnifiedPushRequest(input: {
   return Effect.try({
     try: () => {
       // Match the Android receiver's limits before spending a retry on an undeliverable alert.
-      if (title.length > 120 || message.length > 608 || deepLink.length > 512) throw new Error();
-      const payload = Buffer.from(
-        // @effect-diagnostics-next-line globalJsonInEffect:off -- This typed string map is serialized inside Effect.try.
-        JSON.stringify({
-          device_id: registration.installationId,
-          user_id: "self-hosted",
-          environment_id: registration.environmentId,
-          registration_id: registration.registrationId,
-          updated_at: String(updatedAt),
-          alert_id: sha256(`${deepLink}\n${decisionKey}`),
-          alert_title: title,
-          alert_body: message,
-          alert_group: deepLink,
-          alert_path: deepLink,
-        }),
+      if (deepLink.length > 512) throw new Error();
+      const makePayload = (alertTitle: string, alertBody: string) =>
+        Buffer.from(
+          // @effect-diagnostics-next-line globalJsonInEffect:off -- This typed string map is serialized inside Effect.try.
+          JSON.stringify({
+            device_id: registration.installationId,
+            user_id: "self-hosted",
+            environment_id: registration.environmentId,
+            registration_id: registration.registrationId,
+            updated_at: String(updatedAt),
+            alert_id: sha256(`${deepLink}\n${decisionKey}`),
+            alert_title: alertTitle,
+            alert_body: alertBody,
+            alert_group: deepLink,
+            alert_path: deepLink,
+          }),
+        );
+      const textBudget = Math.max(
+        0,
+        MAX_CIPHERTEXT_BYTES - RFC8291_OVERHEAD_BYTES - makePayload("", "").length,
       );
+      const nativeTitle = truncateNativeText(title, 120, textBudget);
+      const titleBytes = Buffer.byteLength(JSON.stringify(nativeTitle)) - 2;
+      const nativeMessage = truncateNativeText(message, 608, textBudget - titleBytes);
+      const payload = makePayload(nativeTitle, nativeMessage);
       if (payload.length > MAX_CIPHERTEXT_BYTES - RFC8291_OVERHEAD_BYTES) throw new Error();
       const { cipherText } = encrypt(registration.p256dh, registration.auth, payload, "aes128gcm");
       if (cipherText.length > MAX_CIPHERTEXT_BYTES) throw new Error();

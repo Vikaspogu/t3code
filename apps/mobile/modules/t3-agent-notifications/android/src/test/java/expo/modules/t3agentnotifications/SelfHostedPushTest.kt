@@ -7,6 +7,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -21,13 +22,17 @@ class SelfHostedPushTest : AgentNotificationsFixture() {
   private val origin = "https://ntfy.example.com"
   private val endpoint = "$origin/upExample12345?up=1"
 
-  private fun enroll(environmentId: String = "environment"): String {
-    val instance = SelfHostedPush.prepare(context, environmentId, origin, "t3code-dev")
+  private fun enroll(
+    environmentId: String = "environment",
+    serverOrigin: String = origin,
+    serverEndpoint: String = endpoint
+  ): String {
+    val instance = SelfHostedPush.prepare(context, environmentId, serverOrigin, "t3code-dev")
     val publicKey = ByteArray(65).also { it[0] = 4 }
     SelfHostedPush.onNewEndpoint(
       context,
       PushEndpoint(
-        endpoint,
+        serverEndpoint,
         PublicKeySet(
           Base64.encodeToString(publicKey, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
           Base64.encodeToString(ByteArray(16), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
@@ -169,6 +174,7 @@ class SelfHostedPushTest : AgentNotificationsFixture() {
       patched(valid, "registration_id" to "unknown-registration"),
       patched(valid, "alert_path" to "/threads/other/thread"),
       patched(valid, "updated_at" to "0"),
+      patched(valid, "updated_at" to (System.currentTimeMillis() - 120001).toString()),
       PushMessage(byteArrayOf(0xff.toByte()), true)
     )
     invalid.forEach { SelfHostedPush.onMessage(context, it, instance) }
@@ -218,5 +224,37 @@ class SelfHostedPushTest : AgentNotificationsFixture() {
     SelfHostedPush.disable(context, "environment")
     AgentNotifications.receive(context, update("cloud-after", false))
     assertEquals(1, manager.activeNotifications.count { it.tag == "t3-agent-alert" })
+  }
+  @Test
+  fun ipv6OriginIsCanonicalizedForEnrollment() {
+    val canonicalOrigin = "https://[2001:db8::1]"
+    val canonicalEndpoint = "$canonicalOrigin/upExample12345?up=1"
+    enroll(
+      serverOrigin = "https://[2001:0db8:0:0:0:0:0:1]",
+      serverEndpoint = canonicalEndpoint
+    )
+    assertEquals(canonicalEndpoint, JSONObject(SelfHostedPush.enrollment(context, "environment")).getString("endpoint"))
+  }
+
+  @Test
+  fun defaultHttpsPortIsCanonicalizedForEnrollment() {
+    val instance = enroll()
+    val enrollment = JSONObject(SelfHostedPush.enrollment(context, "environment"))
+    val keys = PublicKeySet(enrollment.getString("p256dh"), enrollment.getString("auth"))
+    SelfHostedPush.onNewEndpoint(context,
+      PushEndpoint(endpoint.replace(origin, "$origin:443"), keys, false), instance)
+    assertEquals(endpoint, JSONObject(SelfHostedPush.enrollment(context, "environment")).getString("endpoint"))
+  }
+
+  @Test
+  fun unregistrationClearsRevokedRegistrationAndReceipt() {
+    val instance = enroll()
+    SelfHostedPush.onMessage(context, message(), instance)
+    SelfHostedPush.unregistered(context, instance)
+    SelfHostedPush.prepare(context, "environment", origin, "t3code-dev")
+    val status = JSONObject(SelfHostedPush.status(context)).getJSONArray("environments").getJSONObject(0)
+    assertEquals("registering", status.getString("state"))
+    assertEquals(0, status.getLong("lastReceivedAt"))
+    assertThrows(IllegalStateException::class.java) { SelfHostedPush.enrollment(context, "environment") }
   }
 }

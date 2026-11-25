@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.net.Uri
 import android.util.Base64
+import java.net.InetAddress
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -52,6 +53,43 @@ object SelfHostedPush {
 
   fun isSelected(context: Context): Boolean = prefs(context).getBoolean("selected", false)
 
+  private fun canonicalHost(host: String): String {
+    val lowercase = host.lowercase(Locale.ROOT)
+    if (!lowercase.contains(":")) return lowercase
+    require(!lowercase.contains("%")) { "SelfHostedPushInvalidOrigin" }
+    val bytes = InetAddress.getByName(lowercase.removePrefix("[").removeSuffix("]")).address
+    val groups = when (bytes.size) {
+      16 -> IntArray(8) {
+        ((bytes[it * 2].toInt() and 0xff) shl 8) or (bytes[it * 2 + 1].toInt() and 0xff)
+      }
+      4 -> intArrayOf(
+        0, 0, 0, 0, 0, 0xffff,
+        ((bytes[0].toInt() and 0xff) shl 8) or (bytes[1].toInt() and 0xff),
+        ((bytes[2].toInt() and 0xff) shl 8) or (bytes[3].toInt() and 0xff)
+      )
+      else -> throw IllegalArgumentException("SelfHostedPushInvalidOrigin")
+    }
+    var bestStart = -1
+    var bestLength = 0
+    var index = 0
+    while (index < groups.size) {
+      if (groups[index] != 0) {
+        index++
+        continue
+      }
+      val start = index
+      while (index < groups.size && groups[index] == 0) index++
+      if (index - start > bestLength) {
+        bestStart = start
+        bestLength = index - start
+      }
+    }
+    if (bestLength < 2) return groups.joinToString(":", "[", "]") { it.toString(16) }
+    val before = (0 until bestStart).joinToString(":") { groups[it].toString(16) }
+    val after = (bestStart + bestLength until groups.size).joinToString(":") { groups[it].toString(16) }
+    return "[$before::$after]"
+  }
+
   private fun origin(value: String): String {
     val uri = try { URI(value) } catch (_: Exception) {
       throw IllegalArgumentException("SelfHostedPushInvalidOrigin")
@@ -60,18 +98,19 @@ object SelfHostedPush {
       uri.userInfo == null && uri.fragment == null && uri.query == null &&
       (uri.rawPath.isNullOrEmpty() || uri.rawPath == "/") &&
       (uri.port == -1 || uri.port in 1..65535)) { "SelfHostedPushInvalidOrigin" }
-    return URI("https", null, uri.host.lowercase(Locale.ROOT),
+    return URI("https", null, canonicalHost(uri.host),
       if (uri.port == 443) -1 else uri.port, null, null, null).toString()
   }
 
-  private fun endpointMatches(value: String, expectedOrigin: String): Boolean = try {
+  private fun canonicalEndpoint(value: String, expectedOrigin: String): String? = try {
     val uri = URI(value)
-    uri.userInfo == null && uri.fragment == null &&
+    val endpointOrigin = origin(URI(uri.scheme, null, uri.host, uri.port, null, null, null).toString())
+    if (uri.userInfo == null && uri.fragment == null &&
       uri.rawQuery == "up=1" &&
       Regex("/up[A-Za-z0-9]{12}").matches(uri.rawPath ?: "") &&
-      origin(URI(uri.scheme, null, uri.host, uri.port, null, null, null).toString()) == expectedOrigin
-  } catch (_: Exception) { false }
-
+      endpointOrigin == expectedOrigin
+    ) "$endpointOrigin${uri.rawPath}?up=1" else null
+  } catch (_: Exception) { null }
   internal fun registrationId(endpoint: String, p256dh: String, auth: String): String =
     MessageDigest.getInstance("SHA-256").digest("$endpoint\n$p256dh\n$auth".toByteArray(Charsets.UTF_8))
       .joinToString("") { "%02x".format(it) }
@@ -154,10 +193,11 @@ object SelfHostedPush {
       keys != null && Base64.decode(keys.pubKey, Base64.URL_SAFE).let { it.size == 65 && it[0] == 4.toByte() } &&
         Base64.decode(keys.auth, Base64.URL_SAFE).size == 16
     } catch (_: IllegalArgumentException) { false }
-    if (endpoint.temporary || !endpointMatches(endpoint.url, entry.getString("ntfyOrigin")) || !validKeys) {
+    val canonicalUrl = canonicalEndpoint(endpoint.url, entry.getString("ntfyOrigin"))
+    if (endpoint.temporary || canonicalUrl == null || !validKeys) {
       entry.put("state", "error").put("error", "SelfHostedPushInvalidEndpoint")
     } else {
-      val registration = JSONObject().put("endpoint", endpoint.url)
+      val registration = JSONObject().put("endpoint", canonicalUrl)
         .put("p256dh", keys!!.pubKey).put("auth", keys.auth)
       val active = entry.optJSONObject("active")
       if (active == null || listOf("endpoint", "p256dh", "auth").any {
@@ -223,7 +263,10 @@ object SelfHostedPush {
     val entries = registrations(context)
     val (environmentId, entry) = find(entries, instance) ?: return
     val previouslySelected = isSelected(context)
-    entry.put("enabled", false).put("state", "error").put("error", "SelfHostedPushDistributorUnavailable")
+    entry.remove("active")
+    entry.remove("candidate")
+    entry.put("lastReceivedAt", 0).put("enabled", false).put("state", "error")
+      .put("error", "SelfHostedPushDistributorUnavailable")
     save(context, entries)
     cancelEnvironment(context, environmentId)
     if (previouslySelected && !isSelected(context)) AgentNotifications.clear(context)

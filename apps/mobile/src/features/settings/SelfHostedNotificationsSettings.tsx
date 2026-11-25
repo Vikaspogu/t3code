@@ -85,7 +85,9 @@ export function SelfHostedNotificationsSettings({
         });
       case "error":
         return binding.error === "SelfHostedPushInvalidEndpoint"
-          ? gt("The ntfy endpoint did not match the setup. Check the default server in ntfy.")
+          ? gt(
+              "Check the default server in ntfy, then use Reset setup below before enabling again.",
+            )
           : gt("Could not register with ntfy. Check the ntfy app and try again.");
       default:
         return gt("Off");
@@ -251,7 +253,9 @@ export function SelfHostedNotificationsSettings({
                     }
                   />
                 ) : null}
-                {binding?.enabled && binding.state === "error" ? (
+                {binding?.enabled &&
+                binding.state === "error" &&
+                binding.error !== "SelfHostedPushInvalidEndpoint" ? (
                   <SettingsRow
                     icon="arrow.clockwise"
                     label={gt("Retry setup for {environment}", { environment: label })}
@@ -286,12 +290,22 @@ export function SelfHostedNotificationsSettings({
       ) ? (
         <Text className="px-4 py-3 text-sm text-foreground-muted">
           {gt(
+            "On the paired server, set {urlSetting} to the ntfy origin, choose {topicSetting}, and set {tokenSetting} to a protected file containing the publisher token. Restart the server after changing these settings.",
+            {
+              urlSetting: "T3CODE_NTFY_URL",
+              topicSetting: "T3CODE_NTFY_TOPIC",
+              tokenSetting: "T3CODE_NTFY_TOKEN_FILE",
+            },
+          )}
+          {"\n\n"}
+          {gt(
             "Save the copied setup as the contents of the file specified by {setting} on the paired server. Set its permissions to 0600 and make it readable by the server process.",
             { setting: "T3CODE_NTFY_UP_FILE" },
           )}
           {"\n\n"}
           {gt(
-            "Grant the ntfy phone account read-only access and the server publisher write-only access to the exact topic. Run a turn that finishes in this environment, then refresh here. Only an alert received by this phone verifies setup.",
+            "Grant the ntfy phone account read-only access and the server publisher write-only access to both {topicSetting} and the generated up… topic in the copied endpoint. Run a turn that finishes in this environment, then refresh here. Only an alert received by this phone verifies setup.",
+            { topicSetting: "T3CODE_NTFY_TOPIC" },
           )}
         </Text>
       ) : null}
