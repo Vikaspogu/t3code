@@ -157,7 +157,12 @@ export class HermesGateway {
     this.origin = origin;
   }
 
-  static connect(endpoint: string, token: string, origin: string) {
+  static connect(
+    endpoint: string,
+    token: string,
+    origin: string,
+    environment: NodeJS.ProcessEnv = process.env,
+  ) {
     return Effect.acquireRelease(
       Effect.tryPromise({
         try: async () => {
@@ -168,7 +173,7 @@ export class HermesGateway {
           if (
             url.protocol === "ws:" &&
             !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
-            process.env.HERMES_ALLOW_CLEARTEXT !== "1"
+            environment.HERMES_ALLOW_CLEARTEXT !== "1"
           ) {
             throw new Error("Cleartext Hermes transport requires HERMES_ALLOW_CLEARTEXT=1");
           }
@@ -490,8 +495,8 @@ export interface HermesThreadRecord {
 export class HermesSessionStore {
   private readonly db: NodeSqlite.DatabaseSync;
 
-  static stateDirectoryFromEnv(): string | undefined {
-    return process.env.HERMES_STATE_DIR;
+  static stateDirectoryFromEnv(environment: NodeJS.ProcessEnv = process.env): string | undefined {
+    return environment.HERMES_STATE_DIR;
   }
 
   static hasReservedTurn(

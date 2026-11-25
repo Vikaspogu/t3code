@@ -18,12 +18,14 @@ describe("mergeProviderInstanceEnvironment", () => {
         CODEX_HOME: "~/.inherited-codex",
         CLAUDE_CONFIG_DIR: "~/.inherited-claude",
         GROK_HOME: "~/.inherited-grok",
+        HERMES_STATE_DIR: "~/.inherited-hermes",
       };
       const environment = yield* mergeProviderInstanceEnvironment(
         [
           { name: "CODEX_HOME", value, sensitive: false },
           { name: "CLAUDE_CONFIG_DIR", value, sensitive: false },
           { name: "GROK_HOME", value, sensitive: false },
+          { name: "HERMES_STATE_DIR", value, sensitive: true },
           { name: "CUSTOM_VALUE", value, sensitive: false },
         ],
         baseEnv,
@@ -33,12 +35,14 @@ describe("mergeProviderInstanceEnvironment", () => {
         CODEX_HOME: path.join("/home/ada", tail),
         CLAUDE_CONFIG_DIR: path.join("/home/ada", tail),
         GROK_HOME: path.join("/home/ada", tail),
+        HERMES_STATE_DIR: path.join("/home/ada", tail),
         CUSTOM_VALUE: value,
       });
       expect(baseEnv).toEqual({
         CODEX_HOME: "~/.inherited-codex",
         CLAUDE_CONFIG_DIR: "~/.inherited-claude",
         GROK_HOME: "~/.inherited-grok",
+        HERMES_STATE_DIR: "~/.inherited-hermes",
       });
     }).pipe(
       Effect.provideService(HostProcess.HomeDirectory, "/home/ada"),

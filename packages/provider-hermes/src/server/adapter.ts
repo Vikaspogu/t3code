@@ -219,6 +219,7 @@ const isProfileSelection = (
 export const makeHermesAdapterV2 = (input: {
   readonly instanceId: ProviderAdapter.ProviderAdapterV2["Service"]["instanceId"];
   readonly settings?: HermesSettingsValue;
+  readonly environment?: NodeJS.ProcessEnv;
   // Internal harness only. The built-in driver does not opt in.
   readonly enableTextTurnsForTest?: boolean;
   readonly resolveAttachmentPath?: (
@@ -226,7 +227,7 @@ export const makeHermesAdapterV2 = (input: {
   ) => string | null;
 }): ProviderAdapter.ProviderAdapterV2["Service"] => {
   const settings = { ...DEFAULT_SETTINGS, ...input.settings };
-
+  const environment = input.environment ?? process.env;
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: input.instanceId,
     driver: HERMES_PROVIDER,
@@ -247,9 +248,9 @@ export const makeHermesAdapterV2 = (input: {
     ) {
       const cwd = openInput.runtimePolicy.cwd;
       const endpoint = settings.endpoint;
-      const configuredEndpoint = process.env.HERMES_GATEWAY_URL;
-      const token = process.env.HERMES_SESSION_TOKEN;
-      const stateDirectory = HermesSessionStore.stateDirectoryFromEnv();
+      const configuredEndpoint = environment.HERMES_GATEWAY_URL;
+      const token = environment.HERMES_SESSION_TOKEN;
+      const stateDirectory = HermesSessionStore.stateDirectoryFromEnv(environment);
       const profileId = settings.profileId;
       const principalId = settings.principalId;
       const stateRelative = stateDirectory && cwd ? NodePath.relative(cwd, stateDirectory) : "";
@@ -271,7 +272,12 @@ export const makeHermesAdapterV2 = (input: {
           "Hermes requires cwd, matching HERMES_GATEWAY_URL, session token, absolute external HERMES_STATE_DIR, profile ID, and pinned gateway UID",
         );
       }
-      const gateway = yield* HermesGateway.connect(endpoint, token, hermesOrigin(endpoint)).pipe(
+      const gateway = yield* HermesGateway.connect(
+        endpoint,
+        token,
+        hermesOrigin(endpoint),
+        environment,
+      ).pipe(
         Effect.mapError((cause) =>
           protocolError("Could not open canonical Hermes listener", cause),
         ),

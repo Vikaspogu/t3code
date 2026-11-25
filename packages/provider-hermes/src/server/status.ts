@@ -10,13 +10,14 @@ import { HermesGateway, hermesOrigin } from "./gateway.ts";
 
 export const makeHermesSnapshot = Effect.fn("HermesProvider.snapshot")(function* (
   settings: HermesSettings,
+  environment: NodeJS.ProcessEnv = process.env,
 ) {
-  const token = process.env.HERMES_SESSION_TOKEN;
+  const token = environment.HERMES_SESSION_TOKEN;
   const configured = Boolean(
     settings.enabled &&
     token &&
     settings.principalId.startsWith("uid:") &&
-    NodePath.isAbsolute(process.env.HERMES_STATE_DIR ?? ""),
+    NodePath.isAbsolute(environment.HERMES_STATE_DIR ?? ""),
   );
   const probe = configured
     ? yield* Effect.scoped(
@@ -24,13 +25,14 @@ export const makeHermesSnapshot = Effect.fn("HermesProvider.snapshot")(function*
           if (!token) {
             throw new Error("Hermes session token is missing");
           }
-          if (process.env.HERMES_GATEWAY_URL !== settings.endpoint) {
+          if (environment.HERMES_GATEWAY_URL !== settings.endpoint) {
             throw new Error("Hermes endpoint does not match HERMES_GATEWAY_URL");
           }
           const gateway = yield* HermesGateway.connect(
             settings.endpoint,
             token,
             hermesOrigin(settings.endpoint),
+            environment,
           );
           const connection = yield* gateway.connection;
           const runtime = asRuntimeDescription(yield* connection.request("runtime.describe", {}));

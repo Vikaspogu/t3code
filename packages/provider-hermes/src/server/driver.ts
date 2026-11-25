@@ -8,6 +8,7 @@ import {
   type ProviderInstance,
 } from "@t3tools/provider-core/server/driver";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
@@ -42,6 +43,9 @@ export const HermesDriver: ProviderDriver<HermesSettingsValue, ProviderHost.Prov
   defaultConfig: () => decodeSettings({}),
   create: Effect.fn("HermesDriver.create")(function* (input) {
     const config = { ...input.config, enabled: input.enabled };
+    // Hermes secrets must be instance-scoped: an unset HERMES_* variable stays unset rather
+    // than falling back to the server process token for an instance-chosen endpoint.
+    const environment = yield* mergeProviderInstanceEnvironment(input.environment, {});
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: HERMES_PROVIDER,
       instanceId: input.instanceId,
@@ -76,8 +80,8 @@ export const HermesDriver: ProviderDriver<HermesSettingsValue, ProviderHost.Prov
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
-        makeHermesSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
-      checkProvider: makeHermesSnapshot(config).pipe(Effect.map(stampIdentity)),
+        makeHermesSnapshot(settings.provider, environment).pipe(Effect.map(stampIdentity)),
+      checkProvider: makeHermesSnapshot(config, environment).pipe(Effect.map(stampIdentity)),
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -93,6 +97,7 @@ export const HermesDriver: ProviderDriver<HermesSettingsValue, ProviderHost.Prov
     const orchestrationAdapter = makeHermesAdapterV2({
       instanceId: input.instanceId,
       settings: config,
+      environment,
       resolveAttachmentPath: host.resolveAttachmentPath,
     });
     return {

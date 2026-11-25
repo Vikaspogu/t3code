@@ -10,10 +10,6 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  delete process.env.HERMES_SESSION_TOKEN;
-  delete process.env.HERMES_GATEWAY_URL;
-  delete process.env.HERMES_STATE_DIR;
-  delete process.env.HERMES_ALLOW_CLEARTEXT;
 });
 
 const settings = Schema.decodeSync(HermesSettings)({
@@ -23,14 +19,16 @@ const settings = Schema.decodeSync(HermesSettings)({
   principalId: "uid:1000",
 });
 
-const snapshot = () => makeHermesSnapshot(settings).pipe(Effect.provide(FileSystem.layerNoop({})));
+const snapshot = (environment: NodeJS.ProcessEnv) =>
+  makeHermesSnapshot(settings, environment).pipe(Effect.provide(FileSystem.layerNoop({})));
 
 describe("Hermes provider status", () => {
-  it.effect("does not probe without global session preconditions", () =>
+  it.effect("does not probe without session preconditions", () =>
     Effect.gen(function* () {
-      process.env.HERMES_SESSION_TOKEN = "secret";
-      process.env.HERMES_GATEWAY_URL = settings.endpoint;
-      const result = yield* snapshot();
+      const result = yield* snapshot({
+        HERMES_SESSION_TOKEN: "secret",
+        HERMES_GATEWAY_URL: settings.endpoint,
+      });
       expect(result.status).toBe("warning");
       expect(result.message).toContain("HERMES_STATE_DIR");
     }),
@@ -38,12 +36,13 @@ describe("Hermes provider status", () => {
 
   it.effect("reports ticket authentication failure without an Effect cause dump", () =>
     Effect.gen(function* () {
-      process.env.HERMES_SESSION_TOKEN = "secret";
-      process.env.HERMES_GATEWAY_URL = settings.endpoint;
-      process.env.HERMES_STATE_DIR = "/external/hermes";
-      process.env.HERMES_ALLOW_CLEARTEXT = "1";
       globalThis.fetch = async () => new Response("denied", { status: 401 });
-      const result = yield* snapshot();
+      const result = yield* snapshot({
+        HERMES_SESSION_TOKEN: "secret",
+        HERMES_GATEWAY_URL: settings.endpoint,
+        HERMES_STATE_DIR: "/external/hermes",
+        HERMES_ALLOW_CLEARTEXT: "1",
+      });
       expect(result.status).toBe("error");
       expect(result.auth.status).toBe("unauthenticated");
       expect(result.message).toContain("401");
