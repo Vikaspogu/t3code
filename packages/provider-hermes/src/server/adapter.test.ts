@@ -592,18 +592,14 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
         profileId: "/profile",
         principalId: "uid:1000",
       });
-      process.env.HERMES_SESSION_TOKEN = "secret";
-      process.env.HERMES_GATEWAY_URL = "ws://other.test/api/ws";
-      process.env.HERMES_STATE_DIR = NodePath.join(directory, "state");
-      process.env.HERMES_ALLOW_CLEARTEXT = "1";
-      cleanups.push(() => {
-        delete process.env.HERMES_SESSION_TOKEN;
-        delete process.env.HERMES_GATEWAY_URL;
-        delete process.env.HERMES_STATE_DIR;
-        delete process.env.HERMES_ALLOW_CLEARTEXT;
-      });
+      const environment: NodeJS.ProcessEnv = {
+        HERMES_SESSION_TOKEN: "secret",
+        HERMES_GATEWAY_URL: "ws://other.test/api/ws",
+        HERMES_STATE_DIR: NodePath.join(directory, "state"),
+        HERMES_ALLOW_CLEARTEXT: "1",
+      };
       const instanceId = ProviderInstanceId.make("hermes-test");
-      const adapter = makeHermesAdapterV2({ instanceId, settings });
+      const adapter = makeHermesAdapterV2({ instanceId, settings, environment });
       const input = {
         threadId: ThreadId.make("thread-config"),
         providerSessionId: ProviderSessionId.make("provider-session-config"),
@@ -612,10 +608,10 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
       };
       const openError = () => Effect.scoped(Effect.flip(adapter.openSession(input)));
       expect((yield* openError())._tag).toBe("ProviderAdapterProtocolError");
-      process.env.HERMES_GATEWAY_URL = settings.endpoint;
-      process.env.HERMES_STATE_DIR = cwd;
+      environment.HERMES_GATEWAY_URL = settings.endpoint;
+      environment.HERMES_STATE_DIR = cwd;
       expect((yield* openError())._tag).toBe("ProviderAdapterProtocolError");
-      process.env.HERMES_STATE_DIR = NodePath.relative(
+      environment.HERMES_STATE_DIR = NodePath.relative(
         process.cwd(),
         NodePath.join(directory, "state"),
       );
@@ -623,8 +619,8 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
         _tag: "ProviderAdapterProtocolError",
         detail: expect.stringContaining("absolute external HERMES_STATE_DIR"),
       });
-      process.env.HERMES_STATE_DIR = NodePath.join(directory, "state");
-      delete process.env.HERMES_ALLOW_CLEARTEXT;
+      environment.HERMES_STATE_DIR = NodePath.join(directory, "state");
+      delete environment.HERMES_ALLOW_CLEARTEXT;
       expect((yield* openError())._tag).toBe("ProviderAdapterProtocolError");
     }),
   );
