@@ -296,7 +296,7 @@ jobs:
         run: |
           set -euo pipefail
           export JAVA_HOME="$JAVA_HOME_21_X64"
-          ./gradlew :t3-agent-notifications:testReleaseUnitTest
+          ./gradlew :t3-agent-notifications:test
 
       # Release build: embeds the JS bundle so the app runs standalone. No
       # signingConfig exists in the template, so this emits an unsigned APK
