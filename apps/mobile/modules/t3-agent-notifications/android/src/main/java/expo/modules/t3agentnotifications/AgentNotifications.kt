@@ -49,6 +49,7 @@ object AgentNotifications {
   private const val ALERT_TAG = "t3-agent-alert"
   private const val ACTIVITY_ID = 73001
   private const val MAX_MESSAGE_AGE_MS = 10 * 60 * 1000L
+  private const val MAX_SELF_HOSTED_MESSAGE_AGE_MS = 2 * 60 * 1000L
   private const val RUNNING_LIFETIME_MS = 2 * 60 * 60 * 1000L
   private const val MAX_LIFETIME_MS = 24 * 60 * 60 * 1000L
 
@@ -58,15 +59,17 @@ object AgentNotifications {
     deviceId: String,
     userId: String,
     scheme: String,
-    ongoingEnabled: Boolean
+    ongoingEnabled: Boolean,
+    selfHosted: Boolean = false
   ) {
+    if (selfHosted != SelfHostedPush.isSelected(context)) return
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
     // JS identity is empty on a cold start. Compare the durable identity here
     // so reopening preserves cards, dismissal and replay history for this user.
     if (prefs.getString("userId", null) != userId ||
       prefs.getString("deviceId", null) != deviceId
     ) {
-      clear(context)
+      clear(context, selfHosted)
     }
     val wasEnabled = prefs.getBoolean("ongoing", false)
     prefs.edit().putString(
@@ -80,7 +83,8 @@ object AgentNotifications {
   }
 
   @Synchronized
-  fun clear(context: Context) {
+  fun clear(context: Context, selfHosted: Boolean = false) {
+    if (selfHosted != SelfHostedPush.isSelected(context)) return
     cancelActivity(context)
     context.getSharedPreferences(STORE, Context.MODE_PRIVATE).edit().clear().apply()
     val manager = manager(context)
@@ -117,19 +121,23 @@ object AgentNotifications {
   }
 
   @Synchronized
-  fun receive(context: Context, data: Map<String, String>) {
+  fun receive(context: Context, data: Map<String, String>, selfHosted: Boolean = false): Boolean {
+    if (selfHosted != SelfHostedPush.isSelected(context)) return false
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
-    val updatedAt = data["updated_at"]?.toLongOrNull() ?: return
+    val updatedAt = data["updated_at"]?.toLongOrNull() ?: return false
     val registered = prefs.getBoolean("enabled", false) &&
       data["device_id"] == prefs.getString("deviceId", null) &&
       data["user_id"] == prefs.getString("userId", null)
-    val fresh = System.currentTimeMillis() - updatedAt in -MAX_MESSAGE_AGE_MS..MAX_MESSAGE_AGE_MS
+    val maxAge = if (selfHosted) MAX_SELF_HOSTED_MESSAGE_AGE_MS else MAX_MESSAGE_AGE_MS
+    val fresh = System.currentTimeMillis() - updatedAt in -maxAge..maxAge
     if (registered && fresh && NotificationManagerCompat.from(context).areNotificationsEnabled()) {
       channels(context)
       val scheme = prefs.getString("scheme", "t3code") ?: "t3code"
       val alerted = showAlert(context, prefs, scheme, data)
       updateActivity(context, prefs, data, updatedAt, alerted)
+      return true
     }
+    return false
   }
 
   private fun showAlert(

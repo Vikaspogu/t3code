@@ -7,7 +7,7 @@ name: release-orbit
 # Trigger: push a tag like `orbit-v0.0.46-orbit.5` or run manually.
 # Desktop (macOS) and mobile (Android) jobs are added on top of this later.
 #
-# Every release builds all three surfaces: the server self-update and the
+# Normal releases build all three surfaces: the server self-update and the
 # desktop updater resolve the newest release and must find their assets on it.
 
 on:
@@ -19,13 +19,17 @@ on:
       version:
         description: "Release version (for example 0.0.46-orbit.5)"
         required: true
+      android_only:
+        description: "Build only Android as a prerelease, without CLI or desktop assets"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 # One release per tag: re-runs replace, never stack.
 concurrency:
-  group: orbit-release-${{ github.event_name == 'workflow_dispatch' && format('orbit-v{0}', inputs.version) || github.ref_name }}
+  group: orbit-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-v{1}', inputs.android_only && 'android-native' || 'orbit', inputs.version) || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -39,6 +43,8 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      android_only: ${{ steps.meta.outputs.android_only }}
     steps:
       - name: Resolve version
         id: meta
@@ -47,6 +53,7 @@ jobs:
           # script text: read it from the environment and validate before use.
           DISPATCH_VERSION: ${{ inputs.version }}
           EVENT_NAME: ${{ github.event_name }}
+          ANDROID_ONLY: ${{ inputs.android_only || false }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
@@ -59,15 +66,44 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$ANDROID_ONLY" == "true" ]]; then
+            echo "tag=android-native-v${version}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=orbit-v${version}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "android_only=$ANDROID_ONLY" >> "$GITHUB_OUTPUT"
 
       - name: Create release if missing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No checkout in this job: gh resolves the repo from this variable.
           GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          ANDROID_ONLY: ${{ steps.meta.outputs.android_only }}
         run: |
           set -euo pipefail
-          tag="orbit-v${{ steps.meta.outputs.version }}"
+          tag="$RELEASE_TAG"
+          if [[ "$ANDROID_ONLY" == "true" ]]; then
+            for resource in "git/ref/tags/$tag" "releases/tags/$tag"; do
+              if response="$(gh api --include "repos/$GH_REPO/$resource" 2>/dev/null)"; then
+                echo "Refusing an existing Android-only tag or release." >&2
+                exit 1
+              fi
+              if ! grep -qE '^HTTP/[0-9.]+ 404( |$)' <<<"$response"; then
+                echo "Cannot verify that the Android-only tag and release are unused." >&2
+                exit 1
+              fi
+            done
+            # Claim the tag atomically so a competing run cannot replace its commit.
+            # A failed native run keeps this draft and tag. Recovery needs a fresh version.
+            gh api --method POST "repos/$GH_REPO/git/refs" \
+              -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" >/dev/null
+            gh release create "$tag" --verify-tag --target "$GITHUB_SHA" --title "$tag" \
+              --draft --prerelease --latest=false \
+              --notes "Android-only native notifications prerelease. Server and desktop are unchanged. Real-phone validation is pending."
+            exit 0
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
             # A re-run must not ship assets built from this commit under a
             # release (or tag) that still targets an older one: deleting the
@@ -77,7 +113,7 @@ jobs:
             if [[ "$target" != "$GITHUB_SHA" ]]; then
               gh release delete "$tag" --yes --cleanup-tag
               gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --draft \
-                --notes "Orbit release ${{ steps.meta.outputs.version }}"
+                --notes "Orbit release ${VERSION}"
             else
               # A rerun re-uploads assets with --clobber; keep the release a
               # draft until every surface has attached again.
@@ -85,13 +121,13 @@ jobs:
             fi
           else
             gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --draft \
-              --notes "Orbit release ${{ steps.meta.outputs.version }}"
+              --notes "Orbit release ${VERSION}"
           fi
 
   cli:
     name: CLI + web archive (linux x64)
     # Never let a Gitea Actions mirror try to run this file.
-    if: github.server_url == 'https://github.com'
+    if: github.server_url == 'https://github.com' && needs.release.outputs.android_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     needs:
@@ -210,6 +246,8 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      ANDROID_ONLY: ${{ needs.release.outputs.android_only }}
     steps:
       # Manual checkout: see the cli job for why actions/checkout cannot be used.
       - name: Checkout
@@ -238,7 +276,7 @@ jobs:
       - name: Install dependencies
         run: vp install --filter=@t3tools/mobile...
 
-      # The ubuntu-24.04 runner image already ships JDK 17 (JAVA_HOME_17_X64)
+      # The ubuntu-24.04 runner image already ships JDK 21 (JAVA_HOME_21_X64)
       # and the Android SDK, so no toolchain setup steps are needed.
       - name: Prebuild native project
         working-directory: apps/mobile
@@ -249,6 +287,16 @@ jobs:
           T3CODE_MOBILE_VERSION: ${{ env.VERSION }}
           T3CODE_ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: npx expo prebuild --platform android
+
+      - name: Test native Android notifications
+        working-directory: apps/mobile/android
+        env:
+          GRADLE_OPTS: "-Xmx4g -Dorg.gradle.daemon=false"
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          ./gradlew :t3-agent-notifications:test
 
       # Release build: embeds the JS bundle so the app runs standalone. No
       # signingConfig exists in the template, so this emits an unsigned APK
@@ -261,7 +309,7 @@ jobs:
           ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
         run: |
           set -euo pipefail
-          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export JAVA_HOME="$JAVA_HOME_21_X64"
           ./gradlew assembleRelease
 
       - name: Sign APK
@@ -298,7 +346,37 @@ jobs:
             --ks-pass env:ORBIT_ANDROID_KEYSTORE_PASSWORD \
             --key-pass env:ORBIT_ANDROID_KEY_PASSWORD \
             --out "$out" /tmp/orbit-aligned.apk
-          "$build_tools/apksigner" verify "$out"
+          "$build_tools/apksigner" verify --print-certs "$out"
+          "$build_tools/aapt" dump badging "$out" | grep -E '^(package:|sdkVersion:|targetSdkVersion:|native-code:)'
+
+      - name: Verify APK upgrade identity
+        if: env.ANDROID_ONLY == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          baseline_dir="$(mktemp -d "$RUNNER_TEMP/orbit-baseline.XXXXXX")"
+          trap 'rm -rf "$baseline_dir"' EXIT
+          gh release download orbit-v0.1.2-orbit.23 --repo "$GH_REPO" \
+            --pattern '*-android-arm64.apk' --dir "$baseline_dir"
+          baseline=("$baseline_dir/"*-android-arm64.apk)
+          [[ ${#baseline[@]} == 1 && -f "${baseline[0]}" ]] || { echo "Expected one prior Orbit APK" >&2; exit 1; }
+          candidate="$GITHUB_WORKSPACE/release-android/t3-${VERSION}-android-arm64.apk"
+          build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          baseline_cert="$("$build_tools/apksigner" verify --print-certs "${baseline[0]}" | sed -nE 's/^(Signer #1|V3\.0 Signer:) certificate SHA-256 digest: //p' | tr 'A-F' 'a-f')"
+          candidate_cert="$("$build_tools/apksigner" verify --print-certs "$candidate" | sed -nE 's/^(Signer #1|V3\.0 Signer:) certificate SHA-256 digest: //p' | tr 'A-F' 'a-f')"
+          [[ "$baseline_cert" =~ ^[a-f0-9]{64}$ && "$candidate_cert" == "$baseline_cert" ]] || { echo "APK signing certificate does not match prior Orbit" >&2; exit 1; }
+          baseline_badging="$("$build_tools/aapt" dump badging "${baseline[0]}")"
+          candidate_badging="$("$build_tools/aapt" dump badging "$candidate")"
+          baseline_package="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$baseline_badging")"
+          candidate_package="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$candidate_badging")"
+          [[ "$baseline_package" == com.t3tools.t3code && "$candidate_package" == "$baseline_package" ]] || { echo "APK application ID does not match prior Orbit" >&2; exit 1; }
+          baseline_code="$(sed -n "s/^package: .* versionCode='\([0-9]*\)'.*/\1/p" <<<"$baseline_badging")"
+          candidate_code="$(sed -n "s/^package: .* versionCode='\([0-9]*\)'.*/\1/p" <<<"$candidate_badging")"
+          [[ "$baseline_code" =~ ^[0-9]{1,10}$ && "$candidate_code" =~ ^[0-9]{1,10}$ ]] || { echo "APK version code is invalid" >&2; exit 1; }
+          (( 10#$candidate_code > 10#$baseline_code )) || { echo "APK version code must increase" >&2; exit 1; }
+          echo "APK package and signing certificate match prior Orbit; version code increases"
 
       - name: Upload APK
         working-directory: release-android
@@ -308,12 +386,16 @@ jobs:
           set -euo pipefail
           apk="t3-${VERSION}-android-arm64.apk"
           sha256sum "$apk" > "$apk.sha256"
-          gh release upload "orbit-v${VERSION}" --clobber "$apk" "$apk.sha256"
+          if [[ "$ANDROID_ONLY" == "true" ]]; then
+            gh release upload "$RELEASE_TAG" "$apk" "$apk.sha256"
+          else
+            gh release upload "$RELEASE_TAG" --clobber "$apk" "$apk.sha256"
+          fi
 
   macos:
     name: Desktop DMG (macOS arm64)
     # Never let a Gitea Actions mirror try to run this file.
-    if: github.server_url == 'https://github.com'
+    if: github.server_url == 'https://github.com' && needs.release.outputs.android_only != 'true'
     needs:
       - release
     runs-on: macos-15
@@ -447,7 +529,11 @@ jobs:
   publish:
     name: Publish GitHub release
     # Never let a Gitea Actions mirror try to run this file.
-    if: github.server_url == 'https://github.com'
+    if: >-
+      !cancelled() && github.server_url == 'https://github.com' &&
+      needs.release.result == 'success' && needs.android.result == 'success' &&
+      ((needs.release.outputs.android_only == 'true' && needs.cli.result == 'skipped' && needs.macos.result == 'skipped') ||
+       (needs.release.outputs.android_only != 'true' && needs.cli.result == 'success' && needs.macos.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -463,10 +549,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.release.outputs.version }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          ANDROID_ONLY: ${{ needs.release.outputs.android_only }}
         run: |
           set -euo pipefail
-          tag="orbit-v${VERSION}"
-          # The release stays a draft until every surface has attached its
-          # assets, so updaters (server self-update, electron-updater,
-          # Obtainium) never see a newest version it cannot install yet.
-          gh release edit "$tag" --draft=false
+          if [[ "$ANDROID_ONLY" == "true" ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi

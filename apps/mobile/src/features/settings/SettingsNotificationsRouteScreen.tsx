@@ -48,6 +48,7 @@ import {
   agentAwarenessNotificationsReady,
   getAgentAwarenessRegistrationStatus,
   refreshAgentAwarenessRegistration,
+  resumeCloudAgentAwarenessRegistration,
   subscribeAgentAwarenessRegistrationStatus,
 } from "../agent-awareness/remoteRegistration";
 import { connectionAtomRuntime } from "../../connection/runtime";
@@ -67,6 +68,10 @@ import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
+import {
+  SelfHostedNotificationsSettings,
+  useSelfHostedNotificationSettings,
+} from "./SelfHostedNotificationsSettings";
 
 const updateLiveActivityPreference = createEnvironmentCommand(connectionAtomRuntime, {
   label: "updateLiveActivityPreference",
@@ -135,6 +140,14 @@ function canManageConnect(
   );
 }
 
+class ResumeCloudNotificationsError extends Schema.TaggedError<
+  ResumeCloudNotificationsError,
+  { readonly brand: unique symbol }
+>()("ResumeCloudNotificationsError", {}) {
+  override get message() {
+    return resolveMessage(msg("Could not resume cloud notifications."));
+  }
+}
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
 
@@ -189,25 +202,34 @@ function useNotificationsReady(): boolean {
 
 export function SettingsNotificationsRouteScreen() {
   const gt = useGT();
+  const selfHosted = useSelfHostedNotificationSettings();
   if (!hasCloudPublicConfig()) {
     return (
       <SettingsScreen title={gt("Notifications")}>
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
-          contentContainerClassName="px-5 pt-4"
+          contentContainerClassName="gap-6 px-5 pt-4 pb-6"
         >
-          <Text className="text-base text-foreground-muted">
-            {gt("Notifications require {product} in this app build.", { product: "T3 Connect" })}
-          </Text>
+          {selfHosted.supported ? (
+            <SelfHostedNotificationsSettings {...selfHosted} />
+          ) : (
+            <Text className="text-base text-foreground-muted">
+              {gt("Notifications require {product} in this app build.", { product: "T3 Connect" })}
+            </Text>
+          )}
         </ScrollView>
       </SettingsScreen>
     );
   }
 
-  return <ConfiguredSettingsNotificationsRouteScreen />;
+  return <ConfiguredSettingsNotificationsRouteScreen selfHosted={selfHosted} />;
 }
 
-function ConfiguredSettingsNotificationsRouteScreen() {
+function ConfiguredSettingsNotificationsRouteScreen({
+  selfHosted,
+}: {
+  readonly selfHosted: ReturnType<typeof useSelfHostedNotificationSettings>;
+}) {
   const gt = useGT();
   const m = useMessages();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
@@ -253,12 +275,17 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   const environmentCount = connections.length;
 
   const requestNotifications = async () => {
+    if (selfHosted.cloudBlocked) return;
     const result = await settleAsyncResult(() =>
       runtime.runPromiseExit(
         requestAgentNotificationPermission.pipe(
-          Effect.tap((permission) =>
-            permission.type === "granted" ? refreshAgentAwarenessRegistration() : Effect.void,
-          ),
+          Effect.tap((permission) => {
+            if (permission.type !== "granted") return Effect.void;
+            return Effect.try({
+              try: resumeCloudAgentAwarenessRegistration,
+              catch: () => new ResumeCloudNotificationsError(),
+            }).pipe(Effect.andThen(refreshAgentAwarenessRegistration()));
+          }),
         ),
       ),
     );
@@ -447,6 +474,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   };
 
   const handleDeviceNotificationsChange = (enabled: boolean) => {
+    if (selfHosted.cloudBlocked) return;
     if (enabled) {
       if (!isSignedIn) {
         promptSignIn();
@@ -532,6 +560,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
 
   // Both writers settle their own failures, so awaiting them never throws.
   const handleLiveActivitiesChange = async (enabled: boolean) => {
+    if (selfHosted.cloudBlocked) return;
     if (liveActivityWriteInFlight.current) return;
     if (!enabled) {
       liveActivityWriteInFlight.current = true;
@@ -562,11 +591,13 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
+        {selfHosted.supported ? <SelfHostedNotificationsSettings {...selfHosted} /> : null}
         <SettingsSection title={gt("Agent activity")}>
           <SettingsSwitchRow
             icon="bell.badge"
             label={gt("Device Notifications")}
             disabled={
+              selfHosted.cloudBlocked ||
               !agentAwarenessPlatform.supported ||
               !agentAwarenessPushAvailable ||
               notificationStatus === "checking" ||
@@ -580,6 +611,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           />
           <SettingsSwitchRow
             disabled={
+              selfHosted.cloudBlocked ||
               !agentAwarenessPlatform.supported ||
               !agentAwarenessPushAvailable ||
               !isLoaded ||
@@ -602,6 +634,15 @@ function ConfiguredSettingsNotificationsRouteScreen() {
             }
             onValueChange={(enabled) => void handleLiveActivitiesChange(enabled)}
           />
+          {selfHosted.cloudBlocked &&
+          selfHosted.status !== null &&
+          selfHosted.status !== "unreadable" ? (
+            <Text className="px-4 py-3 text-sm text-foreground-muted">
+              {gt(
+                "Turn off self-hosted notifications for every environment before enabling T3 Connect notifications.",
+              )}
+            </Text>
+          ) : null}
           {liveActivityStatus === "signed-out" && canClearLiveActivitiesPreference ? (
             <SettingsRow
               icon="bolt.circle"

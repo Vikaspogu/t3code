@@ -11,6 +11,26 @@ class T3AgentNotificationsModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("T3AgentNotifications")
 
+    Function("configureSelfHostedPush") { environmentId: String, ntfyOrigin: String, scheme: String ->
+      SelfHostedPush.configure(requireNotNull(appContext.reactContext), environmentId, ntfyOrigin, scheme)
+    }
+
+    Function("getSelfHostedPushStatus") {
+      SelfHostedPush.status(requireNotNull(appContext.reactContext))
+    }
+
+    Function("getSelfHostedPushEnrollment") { environmentId: String ->
+      SelfHostedPush.enrollment(requireNotNull(appContext.reactContext), environmentId)
+    }
+
+    Function("disableSelfHostedPush") { environmentId: String ->
+      SelfHostedPush.disable(requireNotNull(appContext.reactContext), environmentId)
+    }
+
+    Function("removeSelfHostedPush") { environmentId: String ->
+      SelfHostedPush.remove(requireNotNull(appContext.reactContext), environmentId)
+    }
+
     Function("configure") {
         deviceId: String,
         userId: String,

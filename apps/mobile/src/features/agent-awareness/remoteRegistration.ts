@@ -2,6 +2,8 @@ import { type LiveActivity } from "expo-widgets";
 import {
   configureAndroidAgentNotifications,
   clearAndroidAgentNotifications,
+  getSelfHostedPushStatus,
+  supportsSelfHostedPush,
 } from "./androidNotifications";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
@@ -10,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { AppState, Platform } from "react-native";
+import * as SecureStore from "expo-secure-store";
 import { msg } from "gt-react-native";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
@@ -155,6 +158,56 @@ let pendingDeviceRegistration: {
   readonly context: string;
 } | null = null;
 
+const cloudResumeKey = "t3.agent-notifications.require-cloud-resume";
+let cloudResumeRequired: boolean | undefined;
+
+function selfHostedPushSelected(): boolean {
+  if (Platform.OS !== "android") return false;
+  try {
+    return getSelfHostedPushStatus()?.environments.some(({ enabled }) => enabled) ?? false;
+  } catch {
+    // An unreadable owner must not let cloud configure or clear native storage.
+    return true;
+  }
+}
+
+export function selectSelfHostedAgentNotifications(): void {
+  if (!selfHostedPushSelected() || cloudResumeRequired === true) return;
+  deviceRegistrationGeneration++;
+  pendingDeviceRegistration = null;
+  androidDeviceReplayedAt = null;
+  setRegistrationStatus("unknown", false);
+  cloudResumeRequired = true;
+  SecureStore.setItem(cloudResumeKey, "yes");
+}
+
+// Keep automatic token and foreground registration paused across app restarts, even after reset.
+function cloudDeviceRegistrationAllowed(): boolean {
+  if (Platform.OS !== "android") return true;
+  try {
+    if (selfHostedPushSelected()) {
+      selectSelfHostedAgentNotifications();
+      return false;
+    }
+    if (!supportsSelfHostedPush()) return true;
+    cloudResumeRequired ??= SecureStore.getItem(cloudResumeKey) === "yes";
+    return !cloudResumeRequired;
+  } catch {
+    return false;
+  }
+}
+
+export function resumeCloudAgentAwarenessRegistration(): void {
+  if (!supportsSelfHostedPush() || selfHostedPushSelected()) return;
+  if (cloudResumeRequired ?? SecureStore.getItem(cloudResumeKey) === "yes") {
+    SecureStore.setItem(cloudResumeKey, "no");
+    cloudResumeRequired = false;
+  }
+}
+
+function cloudDeviceRegistrationIsCurrent(expectedGeneration: number): boolean {
+  return expectedGeneration === deviceRegistrationGeneration && cloudDeviceRegistrationAllowed();
+}
 interface DeviceRegistrationInput {
   readonly observedPushToken?: string;
 }
@@ -204,7 +257,7 @@ export function setAgentAwarenessRelayTokenProvider(
   if (!isExistingIdentity) {
     // An unset JS identity may mean remount; native configure checks the persisted account on cold start.
     if (relayTokenProviderIdentity && identity !== relayTokenProviderIdentity) {
-      clearAndroidAgentNotifications();
+      if (!selfHostedPushSelected()) clearAndroidAgentNotifications();
     }
     if (provider) {
       publishWidget({ kind: "loading" });
@@ -218,7 +271,7 @@ export function setAgentAwarenessRelayTokenProvider(
   relayTokenProvider = provider;
   relayTokenProviderIdentity = provider ? (identity ?? null) : null;
   if (!provider) {
-    clearAndroidAgentNotifications();
+    if (!selfHostedPushSelected()) clearAndroidAgentNotifications();
     pushTokenSubscription?.remove();
     pushTokenSubscription = null;
     appStateSubscription?.remove();
@@ -390,7 +443,7 @@ const registerDeviceWithRelay = Effect.fn("remoteRegistration.registerDeviceWith
   body: RelayDeviceRegistrationRequest,
   expectedGeneration: number,
 ): Effect.fn.Return<void, AgentAwarenessRegistrationError, AgentAwarenessRegistrationServices> {
-  if (expectedGeneration !== deviceRegistrationGeneration) {
+  if (!cloudDeviceRegistrationIsCurrent(expectedGeneration)) {
     return;
   }
   const relayConfig = readRelayConfig();
@@ -399,7 +452,7 @@ const registerDeviceWithRelay = Effect.fn("remoteRegistration.registerDeviceWith
     return;
   }
   const token = yield* relayToken("read-device-registration-relay-token");
-  if (expectedGeneration !== deviceRegistrationGeneration) {
+  if (!cloudDeviceRegistrationIsCurrent(expectedGeneration)) {
     return;
   }
   if (!token) {
@@ -415,7 +468,7 @@ const registerDeviceWithRelay = Effect.fn("remoteRegistration.registerDeviceWith
     ),
     Effect.orElseSucceed(() => null),
   );
-  if (expectedGeneration !== deviceRegistrationGeneration) {
+  if (!cloudDeviceRegistrationIsCurrent(expectedGeneration)) {
     // Signed out while the record loaded — do not resurrect the cleared
     // record or report the previous account's registration as current.
     return;
@@ -426,6 +479,7 @@ const registerDeviceWithRelay = Effect.fn("remoteRegistration.registerDeviceWith
   // foreground bursts, but repair missed pushes on cold start or a return
   // after time away, just like re-registering an iOS activity token.
   const now = yield* Clock.currentTimeMillis;
+  if (!cloudDeviceRegistrationIsCurrent(expectedGeneration)) return;
   const needsAndroidReplay =
     body.platform === "android" &&
     (androidDeviceReplayedAt === null ||
@@ -445,13 +499,14 @@ const registerDeviceWithRelay = Effect.fn("remoteRegistration.registerDeviceWith
     clerkToken: token,
     payload,
   });
-  if (expectedGeneration !== deviceRegistrationGeneration) {
+  const replayedAt = body.platform === "android" ? yield* Clock.currentTimeMillis : null;
+  if (!cloudDeviceRegistrationIsCurrent(expectedGeneration)) {
     // Signed out while the request was in flight: the sign-out path already
     // reset the status and cleared the record for the next account, so a
     // stale success must not overwrite either.
     return;
   }
-  if (body.platform === "android") androidDeviceReplayedAt = yield* Clock.currentTimeMillis;
+  if (replayedAt !== null) androidDeviceReplayedAt = replayedAt;
   setRegistrationStatus("registered", Boolean(payload.pushToken));
   yield* storage.saveAgentAwarenessRegistrationRecord({ identity, signature }).pipe(
     Effect.catch((error) =>
@@ -664,7 +719,7 @@ function startPendingDeviceRegistration(): void {
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       // Refresh failures leave the relay's accepted registration intact; preserve registered status.
       // A sign-out or account switch meanwhile owns the status, so an obsolete run leaves it alone.
-      if (generation === deviceRegistrationGeneration && registrationStatus !== "registered") {
+      if (cloudDeviceRegistrationIsCurrent(generation) && registrationStatus !== "registered") {
         setRegistrationStatus("failed");
       }
       logRegistrationError(next.context, squashAtomCommandFailure(result));
@@ -677,6 +732,7 @@ function startPendingDeviceRegistration(): void {
 }
 
 function enqueueDeviceRegistration(input: DeviceRegistrationInput, context: string): void {
+  if (!cloudDeviceRegistrationAllowed()) return;
   if (
     activeDeviceRegistration &&
     !registrationAddsInformation(activeDeviceRegistration.input, input)
@@ -697,7 +753,7 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
   input: RegisterDeviceInput = {},
   expectedGeneration = deviceRegistrationGeneration,
 ): Effect.fn.Return<void, AgentAwarenessRegistrationError, AgentAwarenessRegistrationServices> {
-  if (!canRegisterPushNotifications()) {
+  if (!canRegisterPushNotifications() || !cloudDeviceRegistrationIsCurrent(expectedGeneration)) {
     return;
   }
 
@@ -727,7 +783,7 @@ const registerDevice = Effect.fn("remoteRegistration.registerDevice")(function* 
     storedPreferences,
     input.preferencesOverride,
   );
-  if (expectedGeneration !== deviceRegistrationGeneration) return;
+  if (!cloudDeviceRegistrationIsCurrent(expectedGeneration)) return;
   if (relayTokenProvider && relayTokenProviderIdentity) {
     configureAndroidAgentNotifications(
       deviceId,
@@ -847,7 +903,7 @@ export function refreshAgentAwarenessRegistration(): Effect.Effect<
     return registerDevice(undefined, generation).pipe(
       Effect.catch((error) =>
         Effect.sync(() => {
-          if (generation === deviceRegistrationGeneration && registrationStatus !== "registered") {
+          if (cloudDeviceRegistrationIsCurrent(generation) && registrationStatus !== "registered") {
             setRegistrationStatus("failed");
           }
           logRegistrationError("device registration refresh failed", error);
@@ -865,7 +921,7 @@ export function updateAgentAwarenessRegistrationPreferences(
     return registerDevice({ preferencesOverride }, generation).pipe(
       Effect.tapError((error) =>
         Effect.sync(() => {
-          if (generation === deviceRegistrationGeneration && registrationStatus !== "registered") {
+          if (cloudDeviceRegistrationIsCurrent(generation) && registrationStatus !== "registered") {
             setRegistrationStatus("failed");
           }
           logRegistrationError("device preference registration refresh failed", error);
@@ -889,6 +945,7 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   deviceRegistrationGeneration++;
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
+  cloudResumeRequired = undefined;
   registrationStatus = "unknown";
   registeredWithPushToken = false;
   androidDeviceReplayedAt = null;
