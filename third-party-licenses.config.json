@@ -257,6 +257,15 @@
   ],
   "packageOverrides": [
     {
+      "name": "http_ece",
+      "version": "1.2.1",
+      "sourceUrl": "https://github.com/martinthomson/encrypted-content-encoding/blob/v1.2.1/LICENSE",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) 2015 Martin Thomson"]
+      }
+    },
+    {
       "name": "entities",
       "version": "8.1.0",
       "license": "BSD-2-Clause",
