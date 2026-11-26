@@ -521,6 +521,16 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
             "ProviderAdapterProtocolError",
           );
           runtime.authority_epoch = 4;
+          runtime.profile_id = "relative-profile";
+          expect(
+            (yield* Effect.flip(opened.ensureThread({ threadId, modelSelection, runtimePolicy })))
+              ._tag,
+          ).toBe("ProviderAdapterProtocolError");
+          runtime.profile_id = "C:\\profile";
+          expect(
+            (yield* Effect.flip(opened.ensureThread({ threadId, modelSelection, runtimePolicy })))
+              ._tag,
+          ).toBe("ProviderAdapterProtocolError");
           runtime.profile_id = "/other";
           expect(
             (yield* Effect.flip(opened.ensureThread({ threadId, modelSelection, runtimePolicy })))
@@ -577,6 +587,7 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
       expect(calls.find(({ method }) => method === "session.create")?.params.request_id).toMatch(
         /^t3-/,
       );
+      expect(calls.find(({ method }) => method === "session.create")?.params.cwd).toBe("/profile");
       expect(calls.filter(({ method }) => method === "session.resume").length).toBeGreaterThan(0);
     }),
   );

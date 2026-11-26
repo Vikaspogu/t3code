@@ -124,6 +124,7 @@ export const asRuntimeDescription = (value: unknown): RuntimeDescription => {
   const runtime = value as Partial<RuntimeDescription>;
   if (
     typeof runtime.profile_id !== "string" ||
+    !NodePath.posix.isAbsolute(runtime.profile_id) ||
     typeof runtime.instance_id !== "string" ||
     typeof runtime.authority_epoch !== "number" ||
     !Array.isArray(runtime.capabilities)
@@ -1760,6 +1761,7 @@ export const makeHermesAdapterV2 = (input: {
           driver: HERMES_PROVIDER,
           providerInstanceId: input.instanceId,
           status: "ready",
+          // Local orchestration cwd; native Hermes sessions use the verified remote profile home.
           cwd,
           model: openInput.modelSelection.model,
           capabilities: HermesProviderCapabilitiesV2,
@@ -1823,7 +1825,7 @@ export const makeHermesAdapterV2 = (input: {
             const created = yield* request("session.create", {
               request_id: reservation.requestId,
               source: "cli",
-              cwd,
+              cwd: runtime.profile_id,
               toolsets: [],
             });
             const createdSessionId = yield* Effect.try({
