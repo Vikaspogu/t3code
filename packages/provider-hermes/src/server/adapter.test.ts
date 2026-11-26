@@ -2942,104 +2942,127 @@ describe("HermesAdapterV2 G2 text turns", () => {
         }),
       ).pipe(Effect.timeout("10 seconds")),
   );
-  it.live("admits new work only after an exact operator-discarded admission", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hermes-g4-discard-"));
-        cleanups.push(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
-        const state = installSocket();
-        const settings = configure(directory);
-        const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({
-          instanceId,
-          settings,
-          enableTextTurnsForTest: true,
-        });
-        const opened = yield* adapter.openSession({
-          threadId,
-          providerSessionId: ProviderSessionId.make("provider-session-g4-discard"),
-          modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
-        });
-        const providerThread = yield* opened.ensureThread({
-          threadId,
-          modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
-        });
-        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-        const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
-        yield* Stream.runForEach(opened.events, (event) =>
-          Effect.gen(function* () {
-            observed.push(event);
-            yield* Queue.offer(events, event);
-          }),
-        ).pipe(Effect.forkScoped);
+  it.live.each(["automatic", "operator"] as const)(
+    "settles an exact unknown ordinary admission before new work (%s)",
+    (mode) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const directory = NodeFS.mkdtempSync(
+            NodePath.join(NodeOS.tmpdir(), "hermes-g4-ordinary-recovery-"),
+          );
+          cleanups.push(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+          const state = installSocket();
+          const settings = configure(directory);
+          const cwd = NodePath.join(directory, "work");
+          const adapter = makeHermesAdapterV2({
+            instanceId,
+            settings,
+            enableTextTurnsForTest: true,
+          });
+          const opened = yield* adapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("provider-session-g4-ordinary-recovery"),
+            modelSelection,
+            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          });
+          const providerThread = yield* opened.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          });
+          const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+          const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
+          yield* Stream.runForEach(opened.events, (event) =>
+            Effect.gen(function* () {
+              observed.push(event);
+              yield* Queue.offer(events, event);
+            }),
+          ).pipe(Effect.forkScoped);
 
-        state.nextOutcome = "interrupted";
-        yield* opened.startTurn(turnInput(providerThread, cwd, 1, "held ordinary work"));
-        const oldInputId = String(state.submissions[0]!.input_id);
-        let oldReceipt: ReturnType<HermesSessionStore["getTextTurnReceipt"]> = null;
-        yield* Effect.promise(() =>
-          expect
-            .poll(() => {
-              const store = new HermesSessionStore(
-                NodePath.join(directory, "state", "sessions.sqlite3"),
-              );
-              oldReceipt = store.getTextTurnReceipt(oldInputId);
-              store.close();
-              return oldReceipt?.status;
-            })
-            .toBe("started"),
-        );
-        state.resumePending = [{ ...oldReceipt!, input_id: oldInputId, status: "unknown" }];
-        state.restartStatus = "unknown";
-        state.sockets.at(-1)!.close();
-        while (!observed.some((event) => event.type === "turn.terminal")) {
-          yield* Queue.take(events);
-        }
-        expect(observed.filter((event) => event.type === "turn.terminal")).toHaveLength(1);
-        expect(
-          state.calls.filter(
-            (call) =>
-              call.method === "session.interrupt" || call.method === "prompt.resolve_unknown",
-          ),
-        ).toHaveLength(0);
+          state.nextOutcome = "interrupted";
+          yield* opened.startTurn(turnInput(providerThread, cwd, 1, "held ordinary work"));
+          const oldInputId = String(state.submissions[0]!.input_id);
+          let oldReceipt: ReturnType<HermesSessionStore["getTextTurnReceipt"]> = null;
+          yield* Effect.promise(() =>
+            expect
+              .poll(() => {
+                const store = new HermesSessionStore(
+                  NodePath.join(directory, "state", "sessions.sqlite3"),
+                );
+                oldReceipt = store.getTextTurnReceipt(oldInputId);
+                store.close();
+                return oldReceipt?.status;
+              })
+              .toBe("started"),
+          );
+          state.resumePending = [{ ...oldReceipt!, input_id: oldInputId, status: "unknown" }];
+          state.restartStatus = "unknown";
+          if (mode === "operator") state.receiptOverride = "unknown";
+          state.sockets.at(-1)!.close();
+          while (!observed.some((event) => event.type === "turn.terminal")) {
+            yield* Queue.take(events);
+          }
+          expect(observed.filter((event) => event.type === "turn.terminal")).toHaveLength(1);
+          expect(
+            state.calls
+              .filter(
+                (call) =>
+                  call.method === "session.interrupt" || call.method === "prompt.resolve_unknown",
+              )
+              .map((call) => call.method),
+          ).toEqual(Array(mode === "automatic" ? 1 : 2).fill("prompt.resolve_unknown"));
+          if (mode === "operator") {
+            const error = yield* Effect.flip(
+              opened.startTurn(
+                turnInput(providerThread, cwd, 2, "new work after ordinary recovery"),
+              ),
+            );
+            expect(error).toMatchObject({ _tag: "ProviderAdapterProtocolError" });
+            expect(state.submissions).toHaveLength(1);
+            state.receiptOverride = null;
+          }
+          state.resumePending = [];
+          state.prompt = { kind: "clarify", promptId: "after-ordinary-recovery" };
+          yield* opened.startTurn(
+            turnInput(providerThread, cwd, 2, "new work after ordinary recovery"),
+          );
+          state.setCurrentAuthority();
+          state.restartStatus = null;
+          while (
+            !observed.some(
+              (event) =>
+                event.type === "runtime_request.updated" &&
+                event.runtimeRequest.nativeRequestRef?.nativeId === "after-ordinary-recovery",
+            )
+          ) {
+            yield* Queue.take(events);
+          }
 
-        state.restartStatus = "terminal";
-        state.resumePending = [];
-        state.restartOutcome = "interrupted";
-        state.prompt = { kind: "clarify", promptId: "after-operator-discard" };
-        yield* opened.startTurn(turnInput(providerThread, cwd, 2, "new work after discard"));
-        state.setCurrentAuthority();
-        state.restartStatus = null;
-        while (
-          !observed.some(
-            (event) =>
-              event.type === "runtime_request.updated" &&
-              event.runtimeRequest.nativeRequestRef?.nativeId === "after-operator-discard",
-          )
-        ) {
-          yield* Queue.take(events);
-        }
-
-        expect(state.submissions.map((submission) => submission.text)).toEqual([
-          "held ordinary work",
-          "new work after discard",
-        ]);
-        expect(observed.filter((event) => event.type === "turn.terminal")).toHaveLength(1);
-        expect(
-          state.calls.filter(
-            (call) =>
-              call.method === "session.interrupt" || call.method === "prompt.resolve_unknown",
-          ),
-        ).toHaveLength(0);
-        const store = new HermesSessionStore(NodePath.join(directory, "state", "sessions.sqlite3"));
-        const original = store.getTextTurnReceipt(String(state.submissions[0]!.input_id));
-        expect(original).toMatchObject({ status: "terminal", outcome: "interrupted" });
-        expect(store.get(threadId)).toMatchObject({ instanceId: "instance-b", authorityEpoch: 5 });
-        store.close();
-      }),
-    ).pipe(Effect.timeout("10 seconds")),
+          expect(state.submissions.map((submission) => submission.text)).toEqual([
+            "held ordinary work",
+            "new work after ordinary recovery",
+          ]);
+          expect(observed.filter((event) => event.type === "turn.terminal")).toHaveLength(1);
+          expect(
+            state.calls
+              .filter(
+                (call) =>
+                  call.method === "session.interrupt" || call.method === "prompt.resolve_unknown",
+              )
+              .map((call) => call.method),
+          ).toEqual(Array(mode === "automatic" ? 1 : 2).fill("prompt.resolve_unknown"));
+          const store = new HermesSessionStore(
+            NodePath.join(directory, "state", "sessions.sqlite3"),
+          );
+          const original = store.getTextTurnReceipt(String(state.submissions[0]!.input_id));
+          expect(original).toMatchObject({ status: "terminal", outcome: "interrupted" });
+          expect(store.get(threadId)).toMatchObject({
+            instanceId: "instance-b",
+            authorityEpoch: 5,
+          });
+          store.close();
+        }),
+      ).pipe(Effect.timeout("10 seconds")),
   );
 
   it.live.each([

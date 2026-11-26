@@ -1135,11 +1135,11 @@ export const makeHermesAdapterV2 = (input: {
             include_result: true,
           }),
         );
+        const oldPrompts = [...turn.prompts.values()].filter(
+          (prompt) => prompt.runtimeRequest.status === "pending",
+        );
         const alreadyTerminal = receipt.status === "terminal";
         if (!alreadyTerminal) {
-          const oldPrompts = [...turn.prompts.values()].filter(
-            (prompt) => prompt.runtimeRequest.status === "pending",
-          );
           const admissions = recordField(resumed, "pending");
           const matches = Array.isArray(admissions)
             ? admissions.filter((entry) => stringField(entry, "input_id") === turn.inputId)
@@ -1157,10 +1157,14 @@ export const makeHermesAdapterV2 = (input: {
             stringField(recordField(match, "ref"), "session_id") === receipt.ref.session_id &&
             stringField(recordField(match, "ref"), "profile_id") === receipt.ref.profile_id;
           if (receipt.status === "unknown" && oldPrompts.length === 0 && exactAdmission) {
-            // Only an ordinary lost turn may be unlocked by a later external discard.
+            // An ordinary lost turn may still need an external discard if automatic cleanup fails.
             ordinaryLostTurns.add(turn.inputId);
           }
-          if (!exactAdmission || oldPrompts.length !== 1) {
+          if (
+            !exactAdmission ||
+            oldPrompts.length > 1 ||
+            (oldPrompts.length === 0 && receipt.status !== "unknown")
+          ) {
             return yield* protocolError(
               `${restartRecoveryPending}: no exact lost Hermes prompt and admission`,
             );
@@ -1237,14 +1241,19 @@ export const makeHermesAdapterV2 = (input: {
           catch: (cause) => protocolError("Could not durably settle the Hermes restart", cause),
         });
         turn.receipt = terminal;
+        ordinaryLostTurns.delete(turn.inputId);
         if (alreadyTerminal || terminal.outcome !== "interrupted") {
           turn.completionStatus = null;
           turn.finalText = null;
           yield* finalize(turn, request);
           return;
         }
+        const reason =
+          oldPrompts.length > 0
+            ? "Hermes restarted while waiting for approval or clarification."
+            : "Hermes restarted before this turn completed.";
         const message =
-          "gateway_restart_lost_prompt: Hermes restarted while waiting for approval or clarification. " +
+          `gateway_restart_lost_prompt: ${reason} ` +
           "The old admission was interrupted and the original prompt was not re-executed.";
         yield* emitFailure(turn, message, "reusable", message);
       });
@@ -1354,7 +1363,6 @@ export const makeHermesAdapterV2 = (input: {
           catch: failure,
         });
       });
-
       const readHermesImage = Effect.fnUntraced(function* (
         attachment?: ProviderAdapter.ProviderAdapterV2TurnMessage["attachments"][number],
       ) {
