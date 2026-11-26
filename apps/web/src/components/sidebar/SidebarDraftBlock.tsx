@@ -67,6 +67,7 @@ export function draftTerminalLabel(
 
 const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   draftId: DraftId;
+  navigationParent?: string | undefined;
   composer: ComposerThreadDraftState | null;
   terminalLabel: string | null;
   project: ProjectFaviconProject | null;
@@ -144,6 +145,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         role="button"
         tabIndex={0}
         data-sidebar-row={`draft:${draftId}`}
+        data-sidebar-parent={props.navigationParent}
         aria-label={accessibility.label}
         aria-current={accessibility.current}
         data-testid="sidebar-draft-row"
@@ -253,6 +255,8 @@ export function useSidebarDrafts(
 
 export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   draftIds: readonly DraftId[];
+  navigationParent?: string | undefined;
+  showProject?: boolean | undefined;
   routeDraftComposer: ComposerThreadDraftState | null;
   terminalLabels: ReadonlyMap<string, string>;
   jumpLabelByDraftId: ReadonlyMap<DraftId, string> | null;
@@ -293,10 +297,17 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
           <SidebarDraftRow
             key={draftId}
             draftId={draftId}
+            navigationParent={props.navigationParent}
             composer={composer}
             terminalLabel={draftTerminalLabel(session, props.terminalLabels)}
-            project={props.projectByKey.get(projectKey) ?? null}
-            projectDisplayName={props.projectDisplayNameByKey.get(projectKey) ?? null}
+            project={
+              props.showProject === false ? null : (props.projectByKey.get(projectKey) ?? null)
+            }
+            projectDisplayName={
+              props.showProject === false
+                ? null
+                : (props.projectDisplayNameByKey.get(projectKey) ?? null)
+            }
             isActive={draftId === props.routeDraftId}
             jumpLabel={props.jumpLabelByDraftId?.get(draftId) ?? null}
             onNavigate={props.onNavigateToDraft}

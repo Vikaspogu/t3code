@@ -97,7 +97,7 @@ export interface WorkLogEntry {
   readonly projectedItem?: OrchestrationV2ProjectedTurnItem;
 }
 
-export type PendingApproval = ThreadPendingApproval;
+export type PendingApproval = ThreadPendingApproval & { readonly responseBlockedReason?: string };
 export type PendingUserInput = ThreadPendingUserInput;
 
 export type TimelineAttempt = Pick<
@@ -229,7 +229,7 @@ export function deriveActiveWorkStartedAt(
 
 export function derivePendingApprovals(
   approvals: ReadonlyArray<ThreadPendingApproval>,
-): ThreadPendingApproval[] {
+): PendingApproval[] {
   return [...approvals].toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 

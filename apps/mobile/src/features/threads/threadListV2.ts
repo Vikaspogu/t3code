@@ -16,6 +16,13 @@ import {
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
 import {
+  conversationActivity,
+  conversationHomeKey,
+  groupConversationsByHome,
+  type ConversationLens,
+  type HermesConversationHome,
+} from "@t3tools/client-runtime/state/conversation-organization";
+import {
   threadSearchMatchKey,
   threadSearchSubject,
 } from "@t3tools/client-runtime/state/thread-search";
@@ -457,8 +464,16 @@ export interface ThreadListV2Item {
   readonly isLast: boolean;
 }
 
+export interface ThreadListConversationFilter {
+  readonly homes: readonly HermesConversationHome[];
+  readonly homeKey: string | null;
+  readonly lens: ConversationLens;
+  readonly liveEnvironmentIds: ReadonlySet<EnvironmentId>;
+}
+
 export interface ThreadListV2Layout {
   readonly items: ThreadListV2Item[];
+  readonly conversationCounts?: Readonly<Record<"needs-you" | "running" | "unknown", number>>;
   readonly hiddenSettledCount: number;
   /** The settled rows the shelf may list, before its visible limit. */
   readonly listedSettledThreads: ReadonlyArray<EnvironmentThreadShell>;
@@ -871,6 +886,7 @@ export function buildThreadListV2Items(input: {
   readonly isListedSettled?: (thread: EnvironmentThreadShell) => boolean;
   /** Settled threads in scope that are not local (older settled threads not loaded). */
   readonly unloadedSettledCount?: number;
+  readonly conversation?: ThreadListConversationFilter;
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -898,15 +914,39 @@ export function buildThreadListV2Items(input: {
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  const listedThreads = input.threads.filter(
+  const scopedThreads = input.threads.filter(
     (thread) =>
       thread.archivedAt === null &&
       isListedThreadLineage(thread.lineage) &&
       (input.environmentId === null || thread.environmentId === input.environmentId) &&
       (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
-  // The same matches as the command palette, typo fallback included. Only
-  // listed threads are ranked: a hidden exact match must not turn typos off.
+  const conversation = query.length === 0 ? input.conversation : undefined;
+  const conversationCounts = conversation ? { "needs-you": 0, running: 0, unknown: 0 } : undefined;
+  const listedThreads =
+    conversation && conversationCounts
+      ? (() => {
+          const grouped = groupConversationsByHome(scopedThreads, conversation.homes);
+          const home = grouped.hermes.find(
+            ({ home }) =>
+              conversationHomeKey(home.environmentId, home.instanceId) === conversation.homeKey,
+          );
+          const inHome = new Set(home?.conversations ?? grouped.coding);
+          return scopedThreads.filter((thread) => {
+            const selected = `${thread.environmentId}:${thread.id}` === input.selectedThreadKey;
+            const pinned = thread.pinnedAt != null;
+            if (!selected && !pinned && !inHome.has(thread)) return false;
+            const activity = conversationActivity(
+              thread,
+              conversation.liveEnvironmentIds.has(thread.environmentId),
+            );
+            if (activity !== "idle") conversationCounts[activity]++;
+            return (
+              selected || pinned || conversation.lens === "all" || activity === conversation.lens
+            );
+          });
+        })()
+      : scopedThreads;
   const rankedMatches =
     query.length > 0
       ? rankSearchItems(listedThreads, (thread, options) =>
@@ -974,6 +1014,7 @@ export function buildThreadListV2Items(input: {
     });
     const results = [...rankedMatches, ...contentOnly];
     return {
+      ...(conversationCounts ? { conversationCounts } : {}),
       items: results.map((thread, index) => ({
         thread,
         variant: slim.has(thread) ? "slim" : "card",
@@ -1138,6 +1179,7 @@ export function buildThreadListV2Items(input: {
   }
   return {
     items,
+    ...(conversationCounts ? { conversationCounts } : {}),
     hiddenSettledCount: Math.max(0, settledTotal - pagedSettled.length),
     listedSettledThreads: listedSettled,
     pinnedCount: orderedPinned.length,

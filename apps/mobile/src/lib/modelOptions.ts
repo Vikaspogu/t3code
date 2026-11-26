@@ -7,9 +7,11 @@ import { msg } from "gt-react-native";
 import { m } from "../i18n/messages";
 
 import type {
+  EnvironmentId,
   ModelCapabilities,
   ModelSelection,
   ProjectId,
+  ProviderDriverKind,
   RuntimeMode,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
@@ -255,6 +257,67 @@ export function describeUnavailableModelSelection(
       };
 }
 
+export function resolveHermesHomeModel(
+  config: T3ServerConfig | null | undefined,
+  instanceId: ModelSelection["instanceId"],
+  projectId: ProjectId | null,
+  live: boolean,
+): ModelSelection | null {
+  const provider = config?.providers.find((candidate) => candidate.instanceId === instanceId);
+  if (
+    !live ||
+    !config ||
+    !Object.hasOwn(config.settings.providerInstances, instanceId) ||
+    config.settings.providerInstances[instanceId]?.driver !== "hermes" ||
+    provider?.driver !== "hermes" ||
+    !provider.installed ||
+    provider.auth.status === "unauthenticated" ||
+    provider.availability === "unavailable" ||
+    (provider.status !== "ready" && provider.modelsRetained !== true) ||
+    isDriverDisallowed(config, provider.driver) ||
+    !isProviderEnabledForProject(config, provider, projectId)
+  ) {
+    return null;
+  }
+  const model =
+    provider.models.find((item) => item.isDefault && !item.isCustom) ??
+    provider.models.find((item) => !item.isCustom) ??
+    provider.models[0];
+  return model === undefined ? null : { instanceId, model: model.slug };
+}
+
+export function isHermesProviderUnavailable(
+  config: T3ServerConfig | null | undefined,
+  instanceId: ModelSelection["instanceId"],
+  projectId: ProjectId | null,
+  live: boolean,
+  driver?: ProviderDriverKind,
+): boolean {
+  const isHermes =
+    driver === "hermes" ||
+    config?.settings.providerInstances[instanceId]?.driver === "hermes" ||
+    config?.providers.some(
+      (provider) => provider.instanceId === instanceId && provider.driver === "hermes",
+    );
+  return !!isHermes && resolveHermesHomeModel(config, instanceId, projectId, live) === null;
+}
+
+export function isScopedHermesDraftReady(
+  config: T3ServerConfig | null | undefined,
+  project: { readonly environmentId: EnvironmentId; readonly id: ProjectId },
+  scope: {
+    readonly environmentId: EnvironmentId;
+    readonly instanceId: ModelSelection["instanceId"];
+  },
+  selection: ModelSelection | null | undefined,
+  live: boolean,
+): boolean {
+  return (
+    scope.environmentId === project.environmentId &&
+    selection?.instanceId === scope.instanceId &&
+    resolveHermesHomeModel(config, scope.instanceId, project.id, live) !== null
+  );
+}
 export function resolveSelectableModelSelection(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection | null,

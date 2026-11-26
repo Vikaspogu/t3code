@@ -2969,3 +2969,209 @@ describe("composerDraftStore checkout pull request", () => {
     }
   });
 });
+
+describe("composerDraftStore provider-scoped drafts", () => {
+  const HERMES_A = ProviderInstanceId.make("hermes_a");
+  const HERMES_B = ProviderInstanceId.make("hermes_b");
+  const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("scratch"));
+  const remoteProjectRef = scopeProjectRef(OTHER_TEST_ENVIRONMENT_ID, ProjectId.make("scratch"));
+  const logicalKey = "scratch-project";
+  const scopeA = { environmentId: TEST_ENVIRONMENT_ID, providerInstanceId: HERMES_A } as const;
+  const scopeB = { environmentId: TEST_ENVIRONMENT_ID, providerInstanceId: HERMES_B } as const;
+  const scopeARemote = {
+    environmentId: OTHER_TEST_ENVIRONMENT_ID,
+    providerInstanceId: HERMES_A,
+  } as const;
+  const store = () => useComposerDraftStore.getState();
+
+  beforeEach(async () => {
+    resetComposerDraftStore();
+    await useComposerDraftStore.persist.clearStorage();
+  });
+
+  it("keeps one draft per provider scope under one logical project without touching the unscoped lookup", () => {
+    const plain = DraftId.make("draft-plain");
+    const a = DraftId.make("draft-hermes-a");
+    const b = DraftId.make("draft-hermes-b");
+    store().setLogicalProjectDraftThreadId(logicalKey, projectRef, plain, {
+      threadId: ThreadId.make("thread-plain"),
+    });
+    store().setLogicalProjectDraftThreadId(logicalKey, projectRef, a, {
+      threadId: ThreadId.make("thread-a"),
+      providerScope: scopeA,
+    });
+    store().setLogicalProjectDraftThreadId(logicalKey, projectRef, b, {
+      threadId: ThreadId.make("thread-b"),
+      providerScope: scopeB,
+    });
+
+    expect(store().getDraftSessionByProviderScope(logicalKey, scopeA)?.draftId).toBe(a);
+    expect(store().getDraftSessionByProviderScope(logicalKey, scopeB)?.draftId).toBe(b);
+    expect(store().getDraftSessionByLogicalProjectKey(logicalKey)?.draftId).toBe(plain);
+    expect(store().getDraftSessionByProjectRef(projectRef)?.draftId).toBe(plain);
+    expect(store().getDraftSession(a)?.logicalProjectKey).toBe(logicalKey);
+    expect(store().getDraftSession(a)?.projectId).toBe(projectRef.projectId);
+  });
+
+  it("never returns a scoped draft from the unscoped project lookups", () => {
+    const a = DraftId.make("draft-hermes-a");
+    store().setLogicalProjectDraftThreadId(logicalKey, projectRef, a, {
+      threadId: ThreadId.make("thread-a"),
+      providerScope: scopeA,
+    });
+
+    expect(store().getDraftSessionByLogicalProjectKey(logicalKey)).toBeNull();
+    expect(store().getDraftSessionByProjectRef(projectRef)).toBeNull();
+    expect(store().getDraftSessionByProviderScope(logicalKey, scopeB)).toBeNull();
+  });
+
+  it("keeps same instance id in two environments apart and restores text after rehydrating", async () => {
+    vi.useFakeTimers();
+    try {
+      const local = DraftId.make("draft-local-a");
+      const remote = DraftId.make("draft-remote-a");
+      store().setLogicalProjectDraftThreadId(logicalKey, projectRef, local, {
+        threadId: ThreadId.make("thread-local-a"),
+        providerScope: scopeA,
+      });
+      store().setLogicalProjectDraftThreadId(logicalKey, remoteProjectRef, remote, {
+        threadId: ThreadId.make("thread-remote-a"),
+        providerScope: scopeARemote,
+      });
+      store().setPrompt(local, "local text");
+      store().setPrompt(remote, "remote text");
+      const persisted = JSON.parse(
+        JSON.stringify(partializeComposerDraftStoreState(store())),
+      ) as never;
+      const storage = useComposerDraftStore.persist.getOptions().storage;
+      storage?.setItem(COMPOSER_DRAFT_STORAGE_KEY, {
+        version: useComposerDraftStore.persist.getOptions().version ?? 0,
+        state: persisted,
+      } as never);
+      await vi.advanceTimersByTimeAsync(300);
+      resetComposerDraftStore();
+
+      await useComposerDraftStore.persist.rehydrate();
+
+      expect(store().getDraftSessionByProviderScope(logicalKey, scopeA)?.draftId).toBe(local);
+      expect(store().getDraftSessionByProviderScope(logicalKey, scopeARemote)?.draftId).toBe(
+        remote,
+      );
+      expect(store().getDraftSession(local)?.providerScope).toEqual(scopeA);
+      expect(draftByKey(local)?.prompt).toBe("local text");
+      expect(draftByKey(remote)?.prompt).toBe("remote text");
+    } finally {
+      await useComposerDraftStore.persist.clearStorage();
+      vi.useRealTimers();
+      resetComposerDraftStore();
+    }
+  });
+
+  it("drops a scoped empty draft when its environment is cleared", () => {
+    const remote = DraftId.make("draft-remote-a");
+    store().setLogicalProjectDraftThreadId(logicalKey, remoteProjectRef, remote, {
+      threadId: ThreadId.make("thread-remote-a"),
+      providerScope: scopeARemote,
+    });
+
+    clearComposerDraftsEnvironment(OTHER_TEST_ENVIRONMENT_ID);
+
+    expect(store().getDraftSessionByProviderScope(logicalKey, scopeARemote)).toBeNull();
+    expect(store().getDraftSession(remote)).toBeNull();
+  });
+
+  it("round-trips scope, project identity, instance, environment and text through storage", async () => {
+    vi.useFakeTimers();
+    try {
+      const plain = DraftId.make("draft-plain");
+      const a = DraftId.make("draft-hermes-a");
+      const b = DraftId.make("draft-hermes-b");
+      const remote = DraftId.make("draft-remote-a");
+      store().setLogicalProjectDraftThreadId(logicalKey, projectRef, plain, {
+        threadId: ThreadId.make("thread-plain"),
+      });
+      store().setLogicalProjectDraftThreadId(logicalKey, projectRef, a, {
+        threadId: ThreadId.make("thread-a"),
+        providerScope: scopeA,
+      });
+      store().setLogicalProjectDraftThreadId(logicalKey, projectRef, b, {
+        threadId: ThreadId.make("thread-b"),
+        providerScope: scopeB,
+      });
+      store().setLogicalProjectDraftThreadId(logicalKey, remoteProjectRef, remote, {
+        threadId: ThreadId.make("thread-remote-a"),
+        providerScope: scopeARemote,
+      });
+      store().setPrompt(plain, "plain text");
+      store().setPrompt(a, "text a");
+      store().setPrompt(b, "text b");
+      store().setPrompt(remote, "text remote");
+      const storage = useComposerDraftStore.persist.getOptions().storage;
+      storage?.setItem(COMPOSER_DRAFT_STORAGE_KEY, {
+        version: useComposerDraftStore.persist.getOptions().version ?? 0,
+        state: JSON.parse(JSON.stringify(partializeComposerDraftStoreState(store()))) as never,
+      } as never);
+      await vi.advanceTimersByTimeAsync(300);
+      resetComposerDraftStore();
+
+      await useComposerDraftStore.persist.rehydrate();
+
+      const expectations = [
+        [scopeA, a, projectRef, "text a"],
+        [scopeB, b, projectRef, "text b"],
+        [scopeARemote, remote, remoteProjectRef, "text remote"],
+      ] as const;
+      for (const [scope, draftId, ref, text] of expectations) {
+        const session = store().getDraftSessionByProviderScope(logicalKey, scope);
+        expect(session?.draftId).toBe(draftId);
+        expect(session?.providerScope).toEqual(scope);
+        expect(session?.logicalProjectKey).toBe(logicalKey);
+        expect(session?.projectId).toBe(ref.projectId);
+        expect(session?.environmentId).toBe(ref.environmentId);
+        expect(draftByKey(draftId)?.prompt).toBe(text);
+      }
+      expect(store().getDraftSessionByLogicalProjectKey(logicalKey)?.draftId).toBe(plain);
+      expect(store().getDraftSessionByProjectRef(projectRef)?.draftId).toBe(plain);
+      expect(store().getDraftSession(plain)?.providerScope).toBeUndefined();
+      expect(draftByKey(plain)?.prompt).toBe("plain text");
+    } finally {
+      await useComposerDraftStore.persist.clearStorage();
+      vi.useRealTimers();
+      resetComposerDraftStore();
+    }
+  });
+
+  it("hydrates old persisted drafts without providerScope as unscoped drafts", () => {
+    const legacy = DraftId.make("draft-legacy");
+    const merge = useComposerDraftStore.persist.getOptions().merge;
+    const hydrated = merge!(
+      {
+        draftsByThreadKey: {},
+        draftThreadsByThreadKey: {
+          [legacy]: {
+            threadId: "thread-legacy",
+            environmentId: TEST_ENVIRONMENT_ID,
+            projectId: projectRef.projectId,
+            logicalProjectKey: logicalKey,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            envMode: "local",
+            startFromOrigin: false,
+            promotedTo: null,
+          },
+        },
+        logicalProjectDraftThreadKeyByLogicalProjectKey: { [logicalKey]: legacy },
+      },
+      store(),
+    );
+    useComposerDraftStore.setState(hydrated);
+
+    expect(store().getDraftSession(legacy)?.providerScope).toBeUndefined();
+    expect(store().getDraftSessionByLogicalProjectKey(logicalKey)?.draftId).toBe(legacy);
+    expect(store().getDraftSessionByProjectRef(projectRef)?.draftId).toBe(legacy);
+    expect(store().getDraftSessionByProviderScope(logicalKey, scopeA)).toBeNull();
+  });
+});

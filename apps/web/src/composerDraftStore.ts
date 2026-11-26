@@ -421,6 +421,9 @@ const PersistedDraftThreadState = Schema.Struct({
     Schema.Struct({ url: Schema.String, branch: Schema.String }),
   ),
   worktreeRepositories: Schema.optionalKey(Schema.Array(Schema.String)),
+  providerScope: Schema.optionalKey(
+    Schema.Struct({ environmentId: Schema.String, providerInstanceId: ProviderInstanceId }),
+  ),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -524,10 +527,31 @@ export interface DraftSessionState {
    * until the user chooses, which leaves the choice to the server's default.
    */
   worktreeRepositories?: ReadonlyArray<string>;
+  /** Set only for drafts created by an explicit provider-instance "New conversation" action. */
+  providerScope?: DraftProviderScope;
   promotedTo?: ScopedThreadRef | null;
 }
 
 export type DraftThreadState = DraftSessionState;
+
+export interface DraftProviderScope {
+  readonly environmentId: EnvironmentId;
+  readonly providerInstanceId: ProviderInstanceId;
+}
+
+/**
+ * Index key for provider-scoped drafts. It shares the logical-project mapping record (so
+ * persistence and cleanup follow the draft) under a reserved prefix that no scoped project key or
+ * workspace path starts with; the draft's own `logicalProjectKey` stays the real project key.
+ */
+const PROVIDER_DRAFT_SCOPE_KEY_PREFIX = "provider-draft-scope:";
+
+function providerDraftScopeKey(logicalProjectKey: string, scope: DraftProviderScope): string {
+  return (
+    PROVIDER_DRAFT_SCOPE_KEY_PREFIX +
+    JSON.stringify([logicalProjectKey.trim(), scope.environmentId, scope.providerInstanceId])
+  );
+}
 
 export interface DraftCheckoutPullRequest {
   readonly url: string;
@@ -571,6 +595,10 @@ interface ComposerDraftStoreState {
   stickyActiveProvider: ProviderInstanceId | null;
   getComposerDraft: (target: ComposerThreadTarget) => ComposerThreadDraftState | null;
   getDraftSessionByLogicalProjectKey: (logicalProjectKey: string) => ProjectDraftSession | null;
+  getDraftSessionByProviderScope: (
+    logicalProjectKey: string,
+    scope: DraftProviderScope,
+  ) => ProjectDraftSession | null;
   getDraftThreadByProjectRef: (projectRef: ScopedProjectRef) => ProjectDraftSession | null;
   getDraftSessionByProjectRef: (projectRef: ScopedProjectRef) => ProjectDraftSession | null;
   getDraftSession: (draftId: DraftId) => DraftSessionState | null;
@@ -597,6 +625,7 @@ interface ComposerDraftStoreState {
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
       checkoutPullRequest?: DraftCheckoutPullRequest | null;
+      providerScope?: DraftProviderScope | null;
     },
   ) => void;
   setProjectDraftThreadId: (
@@ -1734,6 +1763,7 @@ function createDraftThreadState(
     environmentSelection?: "auto" | "manual";
     loadBalancedEnvironmentId?: EnvironmentId | null;
     checkoutPullRequest?: DraftCheckoutPullRequest | null;
+    providerScope?: DraftProviderScope | null;
   },
 ): DraftThreadState {
   const projectChanged =
@@ -1758,6 +1788,10 @@ function createDraftThreadState(
       : options.startFromOrigin;
   const environmentSelection =
     options?.environmentSelection ?? existingThread?.environmentSelection;
+  const providerScope =
+    options?.providerScope === undefined
+      ? existingThread?.providerScope
+      : (options.providerScope ?? undefined);
   const checkoutPullRequest = resolveCheckoutPullRequest(
     existingThread,
     options?.checkoutPullRequest,
@@ -1791,6 +1825,7 @@ function createDraftThreadState(
     ...(!projectChanged && existingThread?.worktreeRepositories !== undefined
       ? { worktreeRepositories: existingThread.worktreeRepositories }
       : {}),
+    ...(providerScope ? { providerScope } : {}),
     promotedTo: null,
   };
 }
@@ -1853,6 +1888,8 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.startFromOrigin === right.startFromOrigin &&
     checkoutPullRequestsEqual(left.checkoutPullRequest, right.checkoutPullRequest) &&
     worktreeRepositoriesEqual(left.worktreeRepositories, right.worktreeRepositories) &&
+    left.providerScope?.environmentId === right.providerScope?.environmentId &&
+    left.providerScope?.providerInstanceId === right.providerScope?.providerInstanceId &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1903,6 +1940,19 @@ function normalizePersistedCheckoutPullRequest(value: unknown): DraftCheckoutPul
     : null;
 }
 
+function normalizePersistedProviderScope(value: unknown) {
+  if (typeof value !== "object" || value === null) return {};
+  const { environmentId, providerInstanceId } = value as Record<string, unknown>;
+  return typeof environmentId === "string" && typeof providerInstanceId === "string"
+    ? {
+        providerScope: {
+          environmentId,
+          providerInstanceId: ProviderInstanceId.make(providerInstanceId),
+        },
+      }
+    : {};
+}
+
 function normalizePersistedDraftThreads(
   rawDraftThreadsByThreadId: unknown,
   rawProjectDraftThreadIdByProjectKey: unknown,
@@ -1923,7 +1973,7 @@ function normalizePersistedDraftThreads(
         continue;
       }
       const projectRef = parseScopedProjectKey(projectKey);
-      if (!projectRef) {
+      if (!projectRef || projectKey.startsWith(PROVIDER_DRAFT_SCOPE_KEY_PREFIX)) {
         continue;
       }
       const parsedThreadRef = parseScopedThreadKey(threadId);
@@ -2026,6 +2076,7 @@ function normalizePersistedDraftThreads(
             ? { loadBalancedEnvironmentId: null }
             : {}),
         ...(checkoutPullRequest ? { checkoutPullRequest } : {}),
+        ...normalizePersistedProviderScope(candidateDraftThread.providerScope),
         ...(Array.isArray(candidateDraftThread.worktreeRepositories)
           ? {
               worktreeRepositories: candidateDraftThread.worktreeRepositories.filter(
@@ -2053,6 +2104,8 @@ function normalizePersistedDraftThreads(
       const parsedThreadRef = parseScopedThreadKey(threadKeyOrId);
       const threadKey = normalizeLegacyComposerStorageKey(threadKeyOrId);
       logicalProjectDraftThreadKeyByLogicalProjectKey[logicalProjectKey] = threadKey;
+      // The reserved index key parses as a scoped project key; it must not rewrite the draft's identity.
+      if (logicalProjectKey.startsWith(PROVIDER_DRAFT_SCOPE_KEY_PREFIX)) continue;
       const existingDraftThread = draftThreadsByThreadKey[threadKey];
       if (parsedThreadRef) {
         environmentIdByThreadId.set(parsedThreadRef.threadId, parsedThreadRef.environmentId);
@@ -2819,6 +2872,14 @@ function toHydratedDraftThreadState(
     ...(persistedDraftThread.worktreeRepositories
       ? { worktreeRepositories: persistedDraftThread.worktreeRepositories }
       : {}),
+    ...(persistedDraftThread.providerScope
+      ? {
+          providerScope: {
+            environmentId: persistedDraftThread.providerScope.environmentId as EnvironmentId,
+            providerInstanceId: persistedDraftThread.providerScope.providerInstanceId,
+          },
+        }
+      : {}),
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2860,6 +2921,25 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           }
           return toProjectDraftSession(DraftId.make(draftId), draftThread);
         },
+        getDraftSessionByProviderScope: (logicalProjectKey, scope) => {
+          const state = get();
+          const draftId =
+            state.logicalProjectDraftThreadKeyByLogicalProjectKey[
+              providerDraftScopeKey(logicalProjectKey, scope)
+            ];
+          const draftThread = draftId ? state.draftThreadsByThreadKey[draftId] : undefined;
+          if (
+            !draftId ||
+            !draftThread ||
+            isDraftThreadPromoting(draftThread) ||
+            !draftThread.providerScope ||
+            draftThread.providerScope.environmentId !== scope.environmentId ||
+            draftThread.providerScope.providerInstanceId !== scope.providerInstanceId
+          ) {
+            return null;
+          }
+          return toProjectDraftSession(DraftId.make(draftId), draftThread);
+        },
         getDraftThreadByProjectRef: (projectRef) => {
           return get().getDraftSessionByProjectRef(projectRef);
         },
@@ -2869,7 +2949,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             state.logicalProjectDraftThreadKeyByLogicalProjectKey,
           )) {
             const draftThread = state.draftThreadsByThreadKey[draftId];
-            if (!draftThread || isDraftThreadPromoting(draftThread)) {
+            if (!draftThread || draftThread.providerScope || isDraftThreadPromoting(draftThread)) {
               continue;
             }
             if (
@@ -2880,7 +2960,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
           }
           for (const [draftId, draftThread] of Object.entries(state.draftThreadsByThreadKey)) {
-            if (isDraftThreadPromoting(draftThread)) {
+            if (draftThread.providerScope || isDraftThreadPromoting(draftThread)) {
               continue;
             }
             if (
@@ -2940,8 +3020,15 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           }
           set((state) => {
             const existingThread = state.draftThreadsByThreadKey[draftId];
+            const providerScope =
+              options?.providerScope === undefined
+                ? existingThread?.providerScope
+                : (options.providerScope ?? undefined);
+            const mappingKey = providerScope
+              ? providerDraftScopeKey(normalizedLogicalProjectKey, providerScope)
+              : normalizedLogicalProjectKey;
             const previousThreadKeyForLogicalProject =
-              state.logicalProjectDraftThreadKeyByLogicalProjectKey[normalizedLogicalProjectKey];
+              state.logicalProjectDraftThreadKeyByLogicalProjectKey[mappingKey];
             const nextDraftThread = createDraftThreadState(
               projectRef,
               options?.threadId ?? existingThread?.threadId ?? ThreadId.make(draftId),
@@ -2954,7 +3041,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               state.logicalProjectDraftThreadKeyByLogicalProjectKey,
             ).every(
               ([logicalKey, mappedDraftId]) =>
-                mappedDraftId !== draftId || logicalKey === normalizedLogicalProjectKey,
+                mappedDraftId !== draftId || logicalKey === mappingKey,
             );
             if (
               hasSameLogicalMapping &&
@@ -2967,11 +3054,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               Object.fromEntries(
                 Object.entries(state.logicalProjectDraftThreadKeyByLogicalProjectKey).filter(
                   ([logicalKey, mappedDraftId]) =>
-                    mappedDraftId !== draftId || logicalKey === normalizedLogicalProjectKey,
+                    mappedDraftId !== draftId || logicalKey === mappingKey,
                 ),
               );
-            nextLogicalProjectDraftThreadKeyByLogicalProjectKey[normalizedLogicalProjectKey] =
-              draftId;
+            nextLogicalProjectDraftThreadKeyByLogicalProjectKey[mappingKey] = draftId;
             const nextDraftThreadsByThreadKey: Record<string, DraftThreadState> = {
               ...state.draftThreadsByThreadKey,
               [draftId]: nextDraftThread,
@@ -3114,6 +3200,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               startFromOrigin: nextStartFromOrigin,
               ...(checkoutPullRequest ? { checkoutPullRequest } : {}),
               ...(worktreeRepositories ? { worktreeRepositories } : {}),
+              ...(existing.providerScope ? { providerScope: existing.providerScope } : {}),
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =

@@ -1,3 +1,4 @@
+// @effect-diagnostics globalJsonInEffect:off -- Native payload budgets use the exact serialized UTF-8 bytes.
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Validate the P-256 point and hash the exact registration tuple.
 import * as NodeCrypto from "node:crypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect FileSystem lacks O_NOFOLLOW and O_NONBLOCK.
@@ -145,7 +146,6 @@ export function makeUnifiedPushRequest(input: {
       if (deepLink.length > 512) throw new Error();
       const makePayload = (alertTitle: string, alertBody: string) =>
         Buffer.from(
-          // @effect-diagnostics-next-line globalJsonInEffect:off -- This typed string map is serialized inside Effect.try.
           JSON.stringify({
             device_id: registration.installationId,
             user_id: "self-hosted",

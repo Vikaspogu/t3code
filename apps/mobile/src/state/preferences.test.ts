@@ -64,6 +64,30 @@ function makePreferencesState(
 }
 
 describe("mobile preferences state", () => {
+  it.effect(
+    "keeps conversation organization off for old data and persists both toggle values",
+    () =>
+      Effect.gen(function* () {
+        let persisted: MobilePreferences.Preferences = { workingShelfEnabled: false };
+        const state = makePreferencesState({
+          load: Effect.sync(() => persisted),
+          savePatch: (patch) => Effect.sync(() => (persisted = { ...persisted, ...patch })),
+        });
+        const read = (registry: ReturnType<typeof AtomRegistry.make>) =>
+          AtomRegistry.getResult(registry, state.preferencesAtom, { suspendOnWaiting: true });
+        const registry = AtomRegistry.make();
+        const unmount = registry.mount(state.preferencesAtom);
+        expect((yield* read(registry)).sidebarPinnedStatusEnabled).toBeUndefined();
+        for (const enabled of [true, false]) {
+          yield* state.savePreferences.run(registry, { sidebarPinnedStatusEnabled: enabled });
+          const reloaded = AtomRegistry.make();
+          expect((yield* read(reloaded)).sidebarPinnedStatusEnabled).toBe(enabled);
+          reloaded.dispose();
+        }
+        unmount();
+        registry.dispose();
+      }),
+  );
   it.effect("preserves an optimistic patch when the initial load finishes later", () =>
     Effect.gen(function* () {
       const pendingLoad = deferred<MobilePreferences.Preferences>();

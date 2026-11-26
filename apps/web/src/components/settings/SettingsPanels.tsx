@@ -545,7 +545,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? [gt("Working section")]
       : []),
     ...(settings.sidebarPinnedStatusEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedStatusEnabled
-      ? [gt("Pinned thread status")]
+      ? [gt("Conversation organization")]
       : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? [gt("Auto-settle inactive threads")]
@@ -993,15 +993,15 @@ export function GeneralSettingsPanel() {
           {...setting("pinned-status")}
           description={
             <T>
-              Show needs-you, failed, new, and working counts when Pinned is collapsed, plus the
-              thread that needs attention first.
+              Group Hermes conversations by configured provider, show status on pinned threads, and
+              filter loaded conversations by activity.
             </T>
           }
           resetAction={
             settings.sidebarPinnedStatusEnabled !==
             DEFAULT_UNIFIED_SETTINGS.sidebarPinnedStatusEnabled ? (
               <SettingResetButton
-                ariaLabel={gt("Reset pinned thread status to default")}
+                ariaLabel={gt("Reset conversation organization to default")}
                 onClick={() =>
                   updateSettings({
                     sidebarPinnedStatusEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedStatusEnabled,
@@ -1016,7 +1016,7 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarPinnedStatusEnabled: Boolean(checked) })
               }
-              aria-label={gt("Pinned thread status")}
+              aria-label={gt("Conversation organization")}
             />
           }
         />

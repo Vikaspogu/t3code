@@ -67,6 +67,8 @@ export function useThreadListV2ShelfPreferences() {
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
+    sidebarPinnedStatusEnabled:
+      loaded && preferencesResult.value.sidebarPinnedStatusEnabled === true,
     workingShelfExpanded,
     pinnedShelfExpanded,
     idleShelfExpanded,

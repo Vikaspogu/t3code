@@ -11,8 +11,19 @@ import { useEnvironmentScope } from "../../state/session";
 import { ScrollView, View } from "react-native";
 import Animated, { useAnimatedStyle, type DerivedValue } from "react-native-reanimated";
 import { AppText } from "../../components/ui/AppText";
-import { childThreadApprovalsAtom, threadEnvironment } from "../../state/threads";
+import {
+  childThreadApprovalsAtom,
+  environmentThreadDetails,
+  threadEnvironment,
+} from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import * as Option from "effect/Option";
+import { resolveConversationRequestProvider } from "@t3tools/client-runtime/state/conversation-organization";
+import { isHermesProviderUnavailable } from "../../lib/modelOptions";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { sidebarPinnedStatusEnabledAtom } from "../../state/preferences";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { environmentShell } from "../../state/shell";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 
 function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
@@ -21,6 +32,31 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
   const respond = useAtomCommand(threadEnvironment.respondToApproval, { reportFailure: false });
   const [responding, setResponding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { environmentId } = entry.thread;
+  const detailAtom = environmentThreadDetails.stateAtom(entry.thread);
+  const statusAtom = environmentShell.statusAtom(environmentId);
+  const enabled = useAtomValue(sidebarPinnedStatusEnabledAtom);
+  const detail = useAtomValue(detailAtom);
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const status = useAtomValue(statusAtom);
+  const providerBlocked = (
+    currentDetail: typeof detail,
+    currentConfigs: typeof configs,
+    currentStatus: typeof status,
+  ) => {
+    const projection = Option.getOrNull(currentDetail.data);
+    const target = resolveConversationRequestProvider(projection, entry.approval.requestId);
+    if (entry.approval.responseCapability !== "live") return false;
+    if (!projection || !target) return true;
+    return isHermesProviderUnavailable(
+      currentConfigs.get(environmentId),
+      target.providerInstanceId,
+      projection.thread.projectId,
+      currentStatus === "live",
+      target.driver,
+    );
+  };
+  const unavailable = enabled && providerBlocked(detail, configs, status);
   return (
     <View className="mx-3.5 my-2 gap-2">
       <AppText className="font-t3-bold text-sm text-foreground">
@@ -28,12 +64,24 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
           Approval from <Var>{entry.title}</Var>
         </T>
       </AppText>
+      {unavailable ? (
+        <AppText className="text-warning-foreground">{gt("Provider unavailable")}</AppText>
+      ) : null}
       <PendingApprovalCard
-        canOperateThread={canRespond}
+        canOperateThread={canRespond && !unavailable}
         approval={entry.approval}
         respondingApprovalId={responding ? entry.approval.requestId : null}
         onRespond={async (requestId, decision) => {
           if (!canRespond || responding) return;
+          if (
+            appAtomRegistry.get(sidebarPinnedStatusEnabledAtom) &&
+            providerBlocked(
+              appAtomRegistry.get(detailAtom),
+              appAtomRegistry.get(environmentServerConfigsAtom),
+              appAtomRegistry.get(statusAtom),
+            )
+          )
+            return;
           setResponding(true);
           setError(null);
           const result = await respond({

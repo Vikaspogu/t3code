@@ -41,6 +41,10 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useThreadListV2 } from "./useThreadListV2";
+import {
+  ThreadConversationFilters,
+  useThreadConversationFilters,
+} from "./ThreadConversationFilters";
 import { useSidebarRowThreadKey } from "./useSidebarRowThreadKey";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { requestThreadMessageJump } from "./threadMessageJump";
@@ -249,6 +253,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     setSettledVisibleCount((count) => count + THREAD_LIST_V2_SETTLED_PAGE_COUNT);
   const {
     loaded: shelfPreferencesLoaded,
+    sidebarPinnedStatusEnabled,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
@@ -262,6 +267,10 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     toggleIdleShelf,
   } = useThreadListV2ShelfPreferences();
   const now = useThreadListNow(threads);
+  const conversation = useThreadConversationFilters(
+    sidebarPinnedStatusEnabled,
+    options.selectedEnvironmentId,
+  );
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -284,6 +293,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     olderSettledShelf,
   } = useThreadListV2({
     threads: launchingThreads,
+    conversation: conversation?.filter,
     pendingTasks,
     environmentId: options.selectedEnvironmentId,
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -567,6 +577,14 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         );
     }
   };
+  const conversationFilters =
+    conversation && threadListV2Layout.conversationCounts ? (
+      <ThreadConversationFilters
+        controller={conversation}
+        counts={threadListV2Layout.conversationCounts}
+        environments={environments}
+      />
+    ) : undefined;
   const header = (
     <WorkspaceListHeader
       accessibilityLabel={gt("{appName}, Threads", { appName: "T3 Code" })}
@@ -675,6 +693,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={conversationFilters}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>
@@ -728,6 +747,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
+                ListHeaderComponent={conversationFilters}
                 ListEmptyComponent={listEmpty}
               />
             </GestureDetector>

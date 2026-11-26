@@ -405,6 +405,7 @@ export interface ChatComposerProps {
   canResume: boolean;
   isRevertingCheckpoint?: boolean;
   sendDisabledReason: string | null;
+  pendingUserInputUnavailableReason?: string | null;
   isPreparingWorktree: boolean;
   canSteer: boolean;
   bannerItems: readonly ComposerBannerStackItem[];
@@ -555,6 +556,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     canResume,
     isRevertingCheckpoint = false,
     sendDisabledReason: externalSendDisabledReason,
+    pendingUserInputUnavailableReason = null,
     isPreparingWorktree,
     canSteer,
     environmentUnavailable,
@@ -1029,6 +1031,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const sendDisabledReason =
     externalSendDisabledReason ??
+    pendingApprovals.find(
+      (approval) => approval.responseBlockedReason && !heldRequestIds.has(approval.requestId),
+    )?.responseBlockedReason ??
     (multipleModelSelections?.length === 0 ? gt("Select at least one model.") : null) ??
     (activePendingProgress
       ? attachmentBlockReason
@@ -2025,6 +2030,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     submissionTarget,
     noProviderAvailable,
     sendDisabledReason,
+    providerUnavailableReason: activePendingProgress ? pendingUserInputUnavailableReason : null,
     attachmentBlockReason,
     environmentUnavailable: environmentUnavailable !== null,
   });
@@ -2034,8 +2040,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   // The pending Submit button follows the answer's own blockers, matching submitComposer.
   const primaryActionSendDisabledReason =
-    (activePendingProgress ? attachmentBlockReason : sendDisabledReason) ??
-    (speechInput.preparing ? gt("Preparing voice input") : null);
+    (activePendingProgress
+      ? (pendingUserInputUnavailableReason ?? attachmentBlockReason)
+      : sendDisabledReason) ?? (speechInput.preparing ? gt("Preparing voice input") : null);
   const primaryActionEnvironmentUnavailable =
     environmentUnavailable !== null ||
     (!activePendingProgress && (noProviderAvailable || projectSelectionRequired));
@@ -3715,7 +3722,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     pendingUserInputs={pendingUserInputs}
                     cwd={gitCwd ?? undefined}
                     threadRef={routeThreadRef}
-                    disabled={!canOperateThread}
+                    disabled={!canOperateThread || pendingUserInputUnavailableReason !== null}
                     respondingRequestIds={
                       activePendingIsResponding && activePendingUserInput
                         ? [...respondingRequestIds, activePendingUserInput.requestId]

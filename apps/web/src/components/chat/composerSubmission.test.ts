@@ -227,6 +227,15 @@ describe("isComposerSubmissionBlocked", () => {
     );
   });
 
+  it("blocks request answers when their provider is unavailable", () => {
+    const answer = {
+      ...sendBlocked,
+      submissionTarget: "pending-user-input" as const,
+      providerUnavailableReason: "Provider is disabled",
+    };
+    expect(isComposerSubmissionBlocked(answer)).toBe(true);
+  });
+
   it("still blocks a pending answer on its attachments or a lost connection", () => {
     const answer = { ...sendBlocked, submissionTarget: "pending-user-input" as const };
     expect(

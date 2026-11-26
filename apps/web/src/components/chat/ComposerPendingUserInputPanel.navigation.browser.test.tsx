@@ -90,6 +90,7 @@ function useProbeRequests({ environmentId, projection, loading = false, draftTar
     environmentId,
     activeThreadId: projection.thread.id,
     serverProjection: loading ? null : projection,
+    getRequestProviderUnavailableReason: () => null,
     supportsQuestionAttachments: false,
     composerDraftTarget: draftTarget ?? { environmentId, threadId: projection.thread.id },
     setComposerDraftPrompt: (target, prompt) =>
