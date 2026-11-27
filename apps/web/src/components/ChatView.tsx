@@ -326,6 +326,8 @@ import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { resolveScrollToEndClearance } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
+import { HermesPluginPanel } from "./chat/HermesPluginPanel";
+import { useHermesPlugins } from "./chat/useHermesPlugins";
 import { useSideChat } from "./chat/useSideChat";
 import { sideThreadComposer, sideThreadKindOf } from "@t3tools/client-runtime/side-thread";
 import { useOpenSurfaceInMainView } from "../hooks/useOpenSurfaceInMainView";
@@ -588,6 +590,13 @@ export default function ChatView(props: ChatViewProps) {
   const activeProviderThread = serverProjection?.providerThreads.find(
     (thread) => thread.id === serverProjection.thread.activeProviderThreadId,
   );
+  const hermesPlugins = useHermesPlugins({
+    environmentId,
+    threadId,
+    providerThreadId: activeProviderThread?.id,
+    providerInstanceId: activeProviderThread?.providerInstanceId,
+    providerDriver: activeProviderThread?.driver,
+  });
   const activeThreadLiveTokenUsage = latestProviderTurnTokenUsage(
     serverProjection?.providerTurns ?? [],
     serverProjection,
@@ -3965,6 +3974,7 @@ export default function ChatView(props: ChatViewProps) {
                               }}
                               onOpen={openVoiceControls}
                             />
+                            <HermesPluginPanel hermesPlugins={hermesPlugins} />
                             {!composerMounted ? null : (
                               <ChatComposer
                                 onOpenVoice={openVoiceControls}

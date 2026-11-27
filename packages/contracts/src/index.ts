@@ -59,6 +59,7 @@ export * from "./agentSessions.ts";
 export * from "./assets.ts";
 export * from "./review.ts";
 export * from "./mcpApps.ts";
+export * from "./hermesPlugins.ts";
 export * from "./browserImport.ts";
 export * from "./browserProfile.ts";
 export * from "./device.ts";

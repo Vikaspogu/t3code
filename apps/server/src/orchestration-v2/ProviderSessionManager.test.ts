@@ -247,6 +247,7 @@ const modelSelection = {
   model: "gpt-5.4",
 } satisfies ModelSelection;
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
+const HERMES_DRIVER = ProviderDriverKind.make("hermes");
 
 const runtimePolicy = {
   runtimeMode: "full-access",
@@ -4860,6 +4861,33 @@ it.effect(
           }),
           runId: idAllocator.derive.run({ threadId, ordinal: 1 }),
         };
+        const pluginNativeItemId = "plugin:epoch-a:1:plugin.ivan_personal.media_updated";
+        const pluginEvent = {
+          id: idAllocator.derive.turnItemFromProviderItem({
+            driver: HERMES_DRIVER,
+            nativeItemId: pluginNativeItemId,
+          }),
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: providerThread.id,
+          providerTurnId: null,
+          nativeItemRef: {
+            driver: HERMES_DRIVER,
+            nativeId: pluginNativeItemId,
+            strength: "strong" as const,
+          },
+          parentItemId: null,
+          ordinal: 0,
+          status: "completed" as const,
+          title: "plugin.ivan_personal.media_updated",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "plugin_event" as const,
+          eventType: "plugin.ivan_personal.media_updated",
+          payload: { media_id: "media-1" },
+        };
         const commandEvents = [
           {
             type: "turn_item.updated" as const,
@@ -4929,6 +4957,11 @@ it.effect(
             providerThread: { ...providerThread, appThreadId: otherThreadId },
             sessionScoped: true,
           },
+          {
+            type: "turn_item.updated",
+            driver: HERMES_DRIVER,
+            turnItem: pluginEvent,
+          },
           ...pendingRequest.providerEvents,
         ]);
         const persisted = Array.from(yield* Fiber.join(persistedFiber));
@@ -4961,6 +4994,16 @@ it.effect(
         assert.deepInclude(
           projection.turnItems.find((item) => item.id === anchored.id),
           { runId: anchored.runId, output: "retained" },
+        );
+        assert.deepInclude(
+          projection.turnItems.find((item) => item.id === pluginEvent.id),
+          {
+            runId: null,
+            type: "plugin_event",
+            eventType: "plugin.ivan_personal.media_updated",
+            payload: { media_id: "media-1" },
+            status: "completed",
+          },
         );
         assert.isEmpty(projection.runs);
         const unrelated = yield* projectionStore.getThreadProjection(otherThreadId);
