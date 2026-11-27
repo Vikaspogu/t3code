@@ -14,6 +14,10 @@ import {
   type SnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import {
+  summarizeStatuses,
+  type PinnedSummaryStatus,
+} from "@t3tools/client-runtime/state/pinned-summary";
 import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
 import {
   conversationActivity,
@@ -357,6 +361,20 @@ export function resolveThreadListV2Status(
   return "ready";
 }
 
+function resolvePinnedSummaryStatus(
+  thread: Parameters<typeof resolveThreadListV2Status>[0] &
+    Pick<EnvironmentThreadShell, "latestRun" | "lastVisitedAt">,
+): PinnedSummaryStatus {
+  const status = resolveThreadListV2Status(thread);
+  if (status === "approval" || status === "input" || status === "request" || status === "limited") {
+    return "attention";
+  }
+  if (status === "failed") return "failed";
+  if (status === "ready" && threadHasUnseenCompletion(thread)) return "done";
+  if (status === "working") return "working";
+  return "idle";
+}
+
 export function threadListV2RowAccessibilityLabel(
   input: {
     readonly title: string;
@@ -393,8 +411,10 @@ export function threadListV2RowAccessibilityLabel(
 export function resolveThreadListV2RowStatus(
   thread: Parameters<typeof resolveThreadListV2Status>[0] &
     Pick<EnvironmentThreadShell, "latestRun" | "lastVisitedAt">,
+  options?: { readonly preserveFailedStatus?: boolean },
 ): ThreadListV2Status {
   const status = resolveThreadListV2Status(thread);
+  if (status === "failed" && options?.preserveFailedStatus === true) return status;
   // A runtime failure without a failed run has nothing to date it, so it stays.
   if (status !== "failed" || thread.latestRun?.status !== "failed") return status;
   return hasUnseenRunFailure(thread) ? status : "ready";
@@ -462,6 +482,7 @@ export interface ThreadListV2Item {
   readonly pinned: boolean;
   readonly wokeAt: string | null;
   readonly isLast: boolean;
+  readonly preserveFailedStatus?: boolean;
 }
 
 export interface ThreadListConversationFilter {
@@ -488,6 +509,8 @@ export interface ThreadListV2Layout {
   readonly settledShelfHeaderIndex: number | null;
   /** Dot on the header when the shelf is collapsed; null while expanded. */
   readonly pinnedShelfDot: ThreadListV2ShelfDot | null;
+  readonly pinnedSummary: ReturnType<typeof summarizeStatuses> | null;
+  readonly pinnedHiddenCount: number;
   readonly idleCount: number;
   readonly idleShelfDot: ThreadListV2ShelfDot | null;
   readonly workingShelfDot: ThreadListV2ShelfDot | null;
@@ -528,6 +551,8 @@ export interface ThreadListV2PinnedShelfListItem {
   readonly expanded: boolean;
   readonly disabled: boolean;
   readonly dot: ThreadListV2ShelfDot | null;
+  readonly summary?: ReturnType<typeof summarizeStatuses> | null;
+  readonly hiddenCount?: number;
 }
 
 export interface ThreadListV2IdleShelfListItem {
@@ -604,6 +629,7 @@ export function threadListV2ListItemsAreEqual(
         previous.item.variant === item.item.variant &&
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
+        previous.item.preserveFailedStatus === item.item.preserveFailedStatus &&
         previous.item.wokeAt === item.item.wokeAt &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
@@ -627,7 +653,15 @@ export function threadListV2ListItemsAreEqual(
         previous.count === item.count &&
         previous.expanded === item.expanded &&
         previous.disabled === item.disabled &&
-        previous.dot === item.dot
+        previous.hiddenCount === item.hiddenCount &&
+        previous.dot === item.dot &&
+        (previous.summary === item.summary ||
+          (previous.summary != null &&
+            item.summary != null &&
+            previous.summary.attention === item.summary.attention &&
+            previous.summary.failed === item.summary.failed &&
+            previous.summary.done === item.summary.done &&
+            previous.summary.working === item.summary.working))
       );
     case "v2-idle-shelf":
       return (
@@ -703,6 +737,8 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
   readonly pinnedShelfDot?: ThreadListV2ShelfDot | null;
+  readonly pinnedSummary?: ReturnType<typeof summarizeStatuses> | null;
+  readonly pinnedHiddenCount?: number;
   readonly idleCount?: number;
   readonly idleShelfExpanded?: boolean;
   readonly idleShelfDot?: ThreadListV2ShelfDot | null;
@@ -777,6 +813,8 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.pinnedShelfExpanded !== false,
       disabled: shelfDisabled,
       dot: input.pinnedShelfDot ?? null,
+      summary: input.pinnedSummary ?? null,
+      hiddenCount: input.pinnedHiddenCount ?? 0,
     });
     result.push(...threadItems.slice(0, pinnedShelfHeaderIndex));
   }
@@ -874,6 +912,7 @@ export function buildThreadListV2Items(input: {
   readonly now: string;
   readonly workingShelfEnabled?: boolean;
   readonly pinnedShelfExpanded?: boolean;
+  readonly pinnedStatusEnabled?: boolean;
   readonly idleShelfExpanded?: boolean;
   readonly workingShelfExpanded?: boolean;
   readonly isWorking?: (thread: EnvironmentThreadShell) => boolean;
@@ -1028,6 +1067,8 @@ export function buildThreadListV2Items(input: {
       pinnedCount: 0,
       pinnedShelfHeaderIndex: null,
       pinnedShelfDot: null,
+      pinnedSummary: null,
+      pinnedHiddenCount: 0,
       idleCount: 0,
       idleShelfDot: null,
       workingShelfDot: null,
@@ -1096,12 +1137,27 @@ export function buildThreadListV2Items(input: {
     "pinned",
     pending,
   );
+  const pinnedStatusCollapsed =
+    input.pinnedShelfExpanded === false && input.pinnedStatusEnabled === true;
+  const pinnedPreview = pinnedStatusCollapsed
+    ? (orderedPinned.find((thread) => resolvePinnedSummaryStatus(thread) === "attention") ??
+      orderedPinned.find((thread) => resolvePinnedSummaryStatus(thread) === "failed"))
+    : undefined;
   const visiblePinned =
     input.pinnedShelfExpanded !== false
       ? orderedPinned
-      : orderedPinned.filter(
-          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
-        );
+      : [
+          ...(pinnedPreview ? [pinnedPreview] : []),
+          ...orderedPinned.filter(
+            (thread) =>
+              thread !== pinnedPreview &&
+              `${thread.environmentId}:${thread.id}` === selectedThreadKey,
+          ),
+        ];
+  const pinnedSummary = pinnedStatusCollapsed
+    ? summarizeStatuses(orderedPinned.map(resolvePinnedSummaryStatus))
+    : null;
+  const pinnedHiddenCount = pinnedStatusCollapsed ? orderedPinned.length - visiblePinned.length : 0;
   // First active item index; the pinned rows always sit at the top of the list.
   const pinnedShelfHeaderIndex = orderedPinned.length > 0 ? visiblePinned.length : null;
   const notSelectedThread = (thread: EnvironmentThreadShell) =>
@@ -1121,6 +1177,11 @@ export function buildThreadListV2Items(input: {
       variant: "card",
       snoozed: false,
       pinned: true,
+      ...(pinnedStatusCollapsed &&
+      thread === pinnedPreview &&
+      resolveThreadListV2Status(thread) === "failed"
+        ? { preserveFailedStatus: true }
+        : {}),
       wokeAt: resolveThreadListV2WokeAt(thread, { now }),
       isLast: false,
     });
@@ -1191,6 +1252,8 @@ export function buildThreadListV2Items(input: {
     settledCount: settledTotal,
     settledShelfHeaderIndex,
     pinnedShelfDot,
+    pinnedSummary,
+    pinnedHiddenCount,
     idleCount: orderedActive.length,
     idleShelfDot,
     workingShelfDot,

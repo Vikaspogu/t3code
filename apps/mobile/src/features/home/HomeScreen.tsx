@@ -452,6 +452,7 @@ export function HomeScreen(props: HomeScreenProps) {
     shelfPreferencesLoaded,
     workingShelfEnabled,
     pinnedShelfExpanded,
+    pinnedStatusEnabled: sidebarPinnedStatusEnabled,
     idleShelfExpanded,
     workingShelfExpanded,
     snoozedShelfExpanded,
@@ -523,6 +524,8 @@ export function HomeScreen(props: HomeScreenProps) {
           expanded={item.expanded}
           onToggle={togglePinnedShelf}
           dot={item.dot}
+          summary={item.summary}
+          hiddenCount={item.hiddenCount}
         />
       );
     }
@@ -582,6 +585,7 @@ export function HomeScreen(props: HomeScreenProps) {
         hasQueuedMessages={item.hasQueuedMessages}
         snoozed={item.item.snoozed}
         pinned={item.item.pinned}
+        preserveFailedStatus={item.item.preserveFailedStatus}
         wokeAt={item.item.wokeAt}
         snoozePresetMinute={item.snoozePresetMinute ?? ""}
         snoozeWakeLabelText={item.snoozeWakeLabelText}

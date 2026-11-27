@@ -1,11 +1,17 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  CalendarClockIcon,
+  ChartNoAxesColumnIcon,
+  SettingsIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useAtomValue } from "@effect/atom-react";
-import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { useClientSettings, useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
   navigateHistory,
@@ -235,6 +241,9 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   });
   const pullRequestsSupported = usePullRequestsSupported();
   const issuesSupported = useIssuesSupported();
+  const conversationOrganizationEnabled = useClientSettings(
+    (settings) => settings.sidebarPinnedStatusEnabled,
+  );
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -256,6 +265,10 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/settings" });
   };
 
+  const handleScheduledTasksClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/settings/scheduled-tasks" });
+  };
   const handleUsageClick = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -298,6 +311,13 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               icon={<IssueGlyph.issue />}
               label={gt("Issues", { $context: "sidebar link to the list of issues" })}
               onClick={handleIssuesClick}
+            />
+          ) : null}
+          {conversationOrganizationEnabled ? (
+            <SidebarUtilityItem
+              icon={<CalendarClockIcon />}
+              label={gt("Scheduled tasks")}
+              onClick={handleScheduledTasksClick}
             />
           ) : null}
           <SidebarUtilityItem

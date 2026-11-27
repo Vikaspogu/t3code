@@ -130,6 +130,8 @@ export function SidebarSectionHeader(props: {
   label: string;
   /** A muted trailing count. */
   count: number;
+  hiddenPinCount?: number | undefined;
+  onShowMore?: (() => void) | undefined;
   className?: string;
   dragging?: boolean;
   isDropTarget?: boolean;
@@ -151,9 +153,7 @@ export function SidebarSectionHeader(props: {
     ),
   }));
   const dot =
-    (props.marker !== "pinned-header" || props.pinnedStatusEnabled !== true) &&
-    resolvedThreads !== undefined &&
-    resolvedThreads.length > 0
+    resolvedThreads !== undefined && resolvedThreads.length > 0
       ? resolveSidebarFolderDot(resolvedThreads)
       : null;
   const summary =
@@ -209,7 +209,7 @@ export function SidebarSectionHeader(props: {
       data-testid={`sidebar-${props.marker}`}
       className={cn(
         "relative mx-0.5",
-        summaryItems.length > 0 ? "min-h-8" : "h-8",
+        summaryItems.length > 0 || (props.hiddenPinCount ?? 0) > 0 ? "min-h-8" : "h-8",
         props.className,
       )}
     >
@@ -226,16 +226,25 @@ export function SidebarSectionHeader(props: {
                 <span className="sr-only">{FOLDER_DOT_LABEL[dot]}</span>
               </span>
             ) : null}
-            <span className="font-normal tabular-nums">{props.count}</span>
+            <span
+              className={cn(
+                "font-normal tabular-nums",
+                props.pinnedStatusEnabled && "text-sm font-semibold",
+              )}
+            >
+              {props.count}
+            </span>
           </>
         }
       >
-        {props.label}
+        <span className={cn(props.pinnedStatusEnabled && "text-sm font-semibold")}>
+          {props.label}
+        </span>
       </CollapsibleSectionHeader>
       {summaryItems.length > 0 ? (
-        <div className="flex flex-wrap gap-x-3 gap-y-1 px-3 pb-2 text-2xs leading-4">
+        <div className="flex flex-wrap gap-x-3 gap-y-1 px-3 pb-1 text-2xs leading-4 text-secondary-label">
           {summaryItems.map((item) => (
-            <span key={item.dot} className={cn("inline-flex items-center gap-1.5", item.color)}>
+            <span key={item.dot} className="inline-flex items-center gap-1.5">
               <span
                 aria-hidden
                 className={cn("size-1.5 rounded-full", FOLDER_DOT_CLASS_NAME[item.dot])}
@@ -243,6 +252,29 @@ export function SidebarSectionHeader(props: {
               <span className="tabular-nums">{m(item.label, { count: item.count })}</span>
             </span>
           ))}
+        </div>
+      ) : null}
+      {props.marker === "pinned-header" &&
+      props.pinnedStatusEnabled === true &&
+      props.hiddenPinCount !== undefined &&
+      props.hiddenPinCount > 0 &&
+      props.onShowMore ? (
+        <div className="flex items-center justify-between gap-2 px-3 pb-1 text-2xs text-secondary-label">
+          <span>
+            {m(msg("{hidden} of {total}"), {
+              hidden: props.hiddenPinCount,
+              total: props.count,
+            })}
+          </span>
+          <button
+            type="button"
+            className="inline-flex min-h-8 cursor-pointer items-center text-sidebar-foreground underline underline-offset-2"
+            onClick={props.onShowMore}
+          >
+            {m(msg("{count, plural, one {Show {count} more pin} other {Show {count} more pins}}"), {
+              count: props.hiddenPinCount,
+            })}
+          </button>
         </div>
       ) : null}
     </SortableSidebarMarker>
