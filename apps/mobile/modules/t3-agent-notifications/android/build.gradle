@@ -29,6 +29,7 @@ dependencies {
 
 // Expo compiles modules with Java 17; Robolectric's Android 16 runtime needs 21.
 tasks.withType(Test).configureEach {
+  systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
   javaLauncher = javaToolchains.launcherFor {
     languageVersion = JavaLanguageVersion.of(21)
   }
