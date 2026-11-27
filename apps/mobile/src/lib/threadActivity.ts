@@ -637,6 +637,8 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
       return "message";
     case "link_request":
       return "globe";
+    case "plugin_event":
+      return "zap";
   }
 }
 
@@ -739,6 +741,8 @@ function itemSummary(
       return resolve(msg("User message"));
     case "assistant_message":
       return resolve(msg("Assistant message"));
+    case "plugin_event":
+      return item.eventType;
   }
 }
 
@@ -801,6 +805,8 @@ function itemPreview(item: OrchestrationV2TurnItem, resolve: MessageResolver): s
     case "user_message":
     case "assistant_message":
       return item.text || null;
+    case "plugin_event":
+      return JSON.stringify(item.payload);
   }
 }
 

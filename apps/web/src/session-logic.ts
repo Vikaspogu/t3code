@@ -473,6 +473,13 @@ function projectedWorkEntry(
         toolData: item,
       };
     }
+    case "plugin_event":
+      return {
+        ...common,
+        label: title ?? item.eventType,
+        toolTitle: title ?? item.eventType,
+        toolData: { input: item.payload },
+      };
     case "dynamic_tool": {
       const classified = classifyToolActivity({
         itemType: "dynamic_tool_call",

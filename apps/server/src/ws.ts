@@ -128,6 +128,7 @@ import * as ThreadManagementService from "./orchestration-v2/ThreadManagementSer
 import * as ThreadViewers from "./orchestration-v2/ThreadViewers.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
+import * as HermesPluginRequests from "./hermes/HermesPluginRequests.ts";
 import * as McpSignIn from "./mcpApps/McpSignIn.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
@@ -1476,6 +1477,9 @@ export const layerWsRpc = (
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
+      const hermesPluginRequests = yield* Effect.serviceOption(
+        HermesPluginRequests.HermesPluginRequests,
+      );
       const mcpSignIn = yield* McpSignIn.McpSignIn;
       const analytics = yield* AnalyticsService.AnalyticsService;
       const originProps = clientAnalyticsProps;
@@ -2642,6 +2646,16 @@ export const layerWsRpc = (
                   };
                 }),
             };
+          }),
+        [WS_METHODS.hermesPluginsListTools]: (input) =>
+          Option.match(hermesPluginRequests, {
+            onNone: () => Effect.die("HermesPluginRequests is not provided"),
+            onSome: (service) => service.listTools(input),
+          }),
+        [WS_METHODS.hermesPluginsInvoke]: (input) =>
+          Option.match(hermesPluginRequests, {
+            onNone: () => Effect.die("HermesPluginRequests is not provided"),
+            onSome: (service) => service.invoke(input),
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
         [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),

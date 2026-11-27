@@ -18,13 +18,20 @@ import {
 } from "@t3tools/contracts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import { HermesSettings } from "../settings.ts";
-import { HERMES_PROVIDER, makeHermesAdapterV2 } from "./adapter.ts";
+import {
+  advanceHermesReplayCursor,
+  asRuntimeDescription,
+  HERMES_PROVIDER,
+  makeHermesAdapterV2,
+  sessionCreateToolsets,
+} from "./adapter.ts";
 import { HermesSessionStore } from "./gateway.ts";
 
 const socketMock = vi.hoisted(() => ({
@@ -513,6 +520,52 @@ describe("HermesSessionStore", () => {
   });
 });
 
+describe("Hermes plugin settings", () => {
+  it("defaults to profile toolsets with plugin RPC enabled", () => {
+    const settings = decodeHermesSettings({});
+    expect(settings.pluginsEnabled).toBe(true);
+    expect(settings.pluginRpcEnabled).toBe(true);
+    expect(sessionCreateToolsets(settings)).toBeUndefined();
+  });
+
+  it("disables every toolset when plugins are off", () => {
+    const settings = decodeHermesSettings({ pluginsEnabled: false, toolsets: "trek" });
+    expect(sessionCreateToolsets(settings)).toEqual([]);
+  });
+
+  it("trims an explicit toolset allowlist", () => {
+    const settings = decodeHermesSettings({ toolsets: " trek, ivan_paperless, ,ivan_media " });
+    expect(sessionCreateToolsets(settings)).toEqual(["trek", "ivan_paperless", "ivan_media"]);
+  });
+  it("accepts a base runtime regardless of the plugin RPC setting", () => {
+    const runtime = {
+      profile_id: "/profile",
+      instance_id: "instance-a",
+      authority_epoch: 4,
+      capabilities: ["durable-admission-v1", "event-replay-v1"],
+    };
+    expect(asRuntimeDescription(runtime)).toEqual(runtime);
+  });
+});
+
+describe("Hermes replay cursor", () => {
+  it("stays monotonic when listener and turn frames interleave", () => {
+    let cursor: { epoch: string; sequence: number } | null = null;
+    cursor = advanceHermesReplayCursor(cursor, { epoch: "epoch-a", sequence: 1 });
+    cursor = advanceHermesReplayCursor(cursor, { epoch: "epoch-a", sequence: 3 });
+    cursor = advanceHermesReplayCursor(cursor, { epoch: "epoch-a", sequence: 2 });
+    expect(cursor).toEqual({ epoch: "epoch-a", sequence: 3 });
+    expect(advanceHermesReplayCursor(cursor, { epoch: "epoch-a", sequence: 4 })).toEqual({
+      epoch: "epoch-a",
+      sequence: 4,
+    });
+    expect(advanceHermesReplayCursor(cursor, { epoch: "epoch-b", sequence: 1 })).toEqual({
+      epoch: "epoch-b",
+      sequence: 1,
+    });
+  });
+});
+
 describe("HermesAdapterV2 G1 lifecycle", () => {
   it.effect("creates once, resumes the exact session, and leaves turns disabled", () =>
     Effect.gen(function* () {
@@ -523,11 +576,12 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
         params: Record<string, unknown>;
       }> = [];
 
+      const pluginSubscribed = Deferred.makeUnsafe<void>();
       const runtime = {
         profile_id: "/profile",
         instance_id: "instance-a",
         authority_epoch: 4,
-        capabilities: ["durable-admission-v1", "event-replay-v1"],
+        capabilities: ["durable-admission-v1", "event-replay-v1", "plugin-rpc-v1"],
       };
       const sockets: Array<{
         close: () => void;
@@ -585,7 +639,20 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
                       authority_epoch: resumeEpoch,
                       execution_generation: 0,
                     }
-                  : null;
+                  : rpc.method === "tools.show"
+                    ? {
+                        sections: [
+                          {
+                            name: "ivan_personal",
+                            tools: [
+                              { name: "plugin.ivan_personal.echo", description: "Echo parameters" },
+                            ],
+                          },
+                        ],
+                      }
+                    : rpc.method === "plugin.ivan_personal.echo"
+                      ? { echo: { message: params.message } }
+                      : null;
           queueMicrotask(() => {
             const dropping = dropAfterDescribe && rpc.method === "runtime.describe";
             // A queued response can be delivered after the transport stops accepting writes.
@@ -605,6 +672,9 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
                     }),
               }),
             );
+            if (rpc.method === "session.resume") {
+              Deferred.doneUnsafe(pluginSubscribed, Effect.void);
+            }
             if (dropping) this.close();
           });
         }
@@ -678,6 +748,37 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
             "X-Hermes-Session-Token": "secret",
           });
           expect(fetchMock.mock.calls[0]![1]?.signal).toBeInstanceOf(AbortSignal);
+          const pluginEvents = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+          yield* Deferred.await(pluginSubscribed);
+          yield* Stream.runForEach(opened.events, (event) => Queue.offer(pluginEvents, event)).pipe(
+            Effect.forkScoped,
+          );
+          sockets.at(-1)!.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({
+                method: "event",
+                params: {
+                  type: "plugin.ivan_personal.media_updated",
+                  session_id: "session-a",
+                  payload: { media_id: "media-1" },
+                  replay_epoch: "epoch-a",
+                  seq: 1,
+                },
+              }),
+            }),
+          );
+          const pluginEvent = yield* Queue.take(pluginEvents);
+          expect(pluginEvent).toMatchObject({
+            type: "turn_item.updated",
+            turnItem: {
+              threadId,
+              providerThreadId: ensured.id,
+              type: "plugin_event",
+              eventType: "plugin.ivan_personal.media_updated",
+              payload: { media_id: "media-1" },
+              status: "completed",
+            },
+          });
           sockets.at(-1)!.close();
           const repeated = yield* opened.ensureThread({
             threadId,
@@ -686,6 +787,44 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
           });
           expect(repeated.nativeThreadRef).toEqual(ensured.nativeThreadRef);
           expect(sockets).toHaveLength(2);
+          expect(yield* opened.hermesPlugins!.listTools({ providerThread: ensured })).toEqual([
+            {
+              name: "plugin.ivan_personal.echo",
+              toolset: "ivan_personal",
+              description: "Echo parameters",
+            },
+          ]);
+          expect(
+            yield* opened.hermesPlugins!.invoke({
+              providerThread: ensured,
+              method: "plugin.ivan_personal.echo",
+              params: { message: "hello" },
+            }),
+          ).toEqual({ echo: { message: "hello" } });
+          expect(calls.at(-1)).toMatchObject({
+            method: "plugin.ivan_personal.echo",
+            params: { message: "hello", session_id: "session-a" },
+          });
+          expect(
+            yield* opened
+              .hermesPlugins!.invoke({
+                providerThread: ensured,
+                method: "tools.show",
+                params: {},
+              })
+              .pipe(Effect.catch((error) => Effect.succeed(error))),
+          ).toMatchObject({ detail: "Invalid Hermes plugin method" });
+          runtime.capabilities = runtime.capabilities.filter((name) => name !== "plugin-rpc-v1");
+          expect(
+            yield* opened
+              .hermesPlugins!.invoke({
+                providerThread: ensured,
+                method: "plugin.ivan_personal.echo",
+                params: {},
+              })
+              .pipe(Effect.catch((error) => Effect.succeed(error))),
+          ).toMatchObject({ detail: "Hermes runtime does not support plugin RPC" });
+          runtime.capabilities.push("plugin-rpc-v1");
           sockets[0]!.dispatchEvent(new Event("close"));
           sockets[0]!.dispatchEvent(new MessageEvent("message", { data: "{" }));
           const adopted = yield* opened.ensureThread({
@@ -843,6 +982,49 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
           });
           expect(replacement.id).toBe(ensured.id);
           expect(replacement.nativeThreadRef?.nativeId).toBe("session-b");
+          const disabledAdapter = makeHermesAdapterV2({
+            instanceId,
+            settings: decodeHermesSettings({ ...settings, pluginRpcEnabled: false }),
+          });
+          const disabled = yield* disabledAdapter.openSession({
+            threadId,
+            providerSessionId,
+            modelSelection,
+            runtimePolicy,
+          });
+          expect(
+            yield* disabled
+              .hermesPlugins!.invoke({
+                providerThread: ensured,
+                method: "plugin.ivan_personal.echo",
+                params: {},
+              })
+              .pipe(Effect.catch((error) => Effect.succeed(error))),
+          ).toMatchObject({ detail: "Hermes plugin RPC is disabled" });
+          expect(
+            yield* opened.hermesPlugins!.listTools({ providerThread: replacement }),
+          ).toHaveLength(1);
+          expect(
+            yield* disabled.hermesPlugins!.listTools({ providerThread: replacement }),
+          ).toHaveLength(1);
+          const pluginsDisabled = yield* makeHermesAdapterV2({
+            instanceId,
+            settings: decodeHermesSettings({ ...settings, pluginsEnabled: false }),
+          }).openSession({
+            threadId,
+            providerSessionId,
+            modelSelection,
+            runtimePolicy,
+          });
+          expect(
+            yield* pluginsDisabled
+              .hermesPlugins!.invoke({
+                providerThread: ensured,
+                method: "plugin.ivan_personal.echo",
+                params: {},
+              })
+              .pipe(Effect.catch((error) => Effect.succeed(error))),
+          ).toMatchObject({ detail: "Hermes plugin RPC is disabled" });
           return ensured;
         }),
       );
@@ -852,6 +1034,9 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
         /^t3-/,
       );
       expect(calls.find(({ method }) => method === "session.create")?.params.cwd).toBe("/profile");
+      expect(calls.find(({ method }) => method === "session.create")?.params).not.toHaveProperty(
+        "toolsets",
+      );
       expect(calls.filter(({ method }) => method === "session.resume").length).toBeGreaterThan(0);
     }),
   );
@@ -929,6 +1114,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
       events: [] as Array<Record<string, unknown>>,
       sockets: [] as Array<{ close: () => void }>,
       dropNextSubmit: false,
+      emitPluginEvents: false,
       dropNextResponse: false,
       omitSubmitResult: false,
       receiptOverride: null as null | "unknown" | "unavailable",
@@ -976,7 +1162,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
       profile_id: "/profile",
       instance_id: "instance-a",
       authority_epoch: 4,
-      capabilities: ["durable-admission-v1", "event-replay-v1"],
+      capabilities: ["durable-admission-v1", "event-replay-v1", "plugin-rpc-v1"],
     };
     state.setCurrentAuthority = () => {
       runtime.instance_id = "instance-b";
@@ -1283,6 +1469,14 @@ describe("HermesAdapterV2 G2 text turns", () => {
                       type: "message.start",
                       payload: { role: "assistant", part_id: "part-1" },
                     },
+                    ...(state.emitPluginEvents
+                      ? [
+                          {
+                            type: "plugin.ivan_personal.media_updated",
+                            payload: { media_id: "media-1" },
+                          },
+                        ]
+                      : []),
                     ...deltas.map((delta) => ({
                       type: "message.delta",
                       payload: {
@@ -1291,6 +1485,14 @@ describe("HermesAdapterV2 G2 text turns", () => {
                         text: delta,
                       },
                     })),
+                    ...(state.emitPluginEvents
+                      ? [
+                          {
+                            type: "plugin.ivan_personal.media_updated",
+                            payload: { media_id: "media-2" },
+                          },
+                        ]
+                      : []),
                     {
                       type: "message.complete",
                       payload: {
@@ -1520,6 +1722,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
       endpoint: "ws://hermes.test/api/ws",
       profileId: "/profile",
       principalId: "uid:1000",
+      pluginsEnabled: false,
     });
     process.env.HERMES_SESSION_TOKEN = "secret";
     process.env.HERMES_GATEWAY_URL = settings.endpoint;
@@ -2026,7 +2229,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hermes-g2-live-"));
         cleanups.push(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
         const state = installSocket();
-        const settings = configure(directory);
+        const settings = { ...configure(directory), pluginsEnabled: true };
         const cwd = NodePath.join(directory, "work");
         const adapter = makeHermesAdapterV2({
           instanceId,
@@ -2067,11 +2270,21 @@ describe("HermesAdapterV2 G2 text turns", () => {
           }
         });
 
+        state.emitPluginEvents = true;
         const first = turnInput(providerThread, cwd, 1, "first exact input");
         yield* opened.startTurn(first);
         const firstTerminal = yield* takeTerminal();
         expect(firstTerminal.status).toBe("completed");
-        expect(state.calls.some((call) => call.method === "session.events.since")).toBe(false);
+        state.emitPluginEvents = false;
+        settings.pluginsEnabled = false;
+        expect(
+          observed.filter(
+            (event) => event.type === "turn_item.updated" && event.turnItem.type === "plugin_event",
+          ),
+        ).toHaveLength(2);
+        expect(state.calls.filter((call) => call.method === "session.events.since")).toHaveLength(
+          0,
+        );
 
         state.dropNextSubmit = true;
         const second = turnInput(providerThread, cwd, 2, "second exact input");
@@ -2317,7 +2530,9 @@ describe("HermesAdapterV2 G2 text turns", () => {
         expect(state.calls.filter((call) => call.method === "session.events.since")).toHaveLength(
           state.dropTurnStream ? 1 : 0,
         );
-        expect(state.sockets).toHaveLength(state.dropTurnStream ? 2 : 1);
+        expect(state.sockets).toHaveLength(
+          state.dropTurnStream ? (state.emitPluginEvents ? 3 : 2) : 1,
+        );
       }),
     ),
   );

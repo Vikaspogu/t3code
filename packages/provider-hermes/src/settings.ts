@@ -31,7 +31,41 @@ export const HermesSettings = makeProviderSettingsSchema(
     model: text("default").pipe(
       Schema.annotateKey({ title: "Model", providerSettingsForm: { placeholder: "default" } }),
     ),
+    pluginsEnabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({
+        title: "Plugins",
+        description: "Expose Hermes profile toolsets and plugins to new sessions.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    toolsets: text("").pipe(
+      Schema.annotateKey({
+        title: "Toolsets",
+        description:
+          "Optional comma-separated toolset names. Empty uses the Hermes profile defaults.",
+        providerSettingsForm: { placeholder: "trek, ivan_paperless" },
+      }),
+    ),
+    pluginRpcEnabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({
+        title: "Plugin RPC",
+        description: "Require the gateway plugin-rpc-v1 capability for plugin method calls.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
-  { order: ["endpoint", "profileId", "principalId", "model"] },
+  {
+    order: [
+      "endpoint",
+      "profileId",
+      "principalId",
+      "model",
+      "pluginsEnabled",
+      "toolsets",
+      "pluginRpcEnabled",
+    ],
+  },
 );
 export type HermesSettings = typeof HermesSettings.Type;

@@ -25,6 +25,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // provider settings it sits beside in the UI.
   [WS_METHODS.providerSetSkillEnabled]: AuthProvidersManageScope,
   [WS_METHODS.orbitVoiceSnapshot]: AuthOrchestrationReadScope,
+  [WS_METHODS.hermesPluginsInvoke]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   // An MCP sign-in stores a credential for the agent, as an account sign-in does.
   [WS_METHODS.providerMcpSignInStart]: AuthProvidersManageScope,

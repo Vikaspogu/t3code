@@ -17,6 +17,13 @@ import {
   McpAppUpdateModelContextInput,
 } from "./mcpApps.ts";
 import {
+  HermesPluginInvokeInput,
+  HermesPluginInvokeResult,
+  HermesPluginListToolsInput,
+  HermesPluginListToolsResult,
+  HermesPluginRequestError,
+} from "./hermesPlugins.ts";
+import {
   PeerLink,
   PeerLinkClientPairingInput,
   PeerLinkLinkPairingInput,
@@ -518,6 +525,8 @@ export const WS_METHODS = {
 
   mcpAppsCallTool: "mcpApps.callTool",
   mcpAppsToolInfo: "mcpApps.toolInfo",
+  hermesPluginsListTools: "hermesPlugins.listTools",
+  hermesPluginsInvoke: "hermesPlugins.invoke",
   mcpAppsReadResource: "mcpApps.readResource",
   mcpAppsUpdateModelContext: "mcpApps.updateModelContext",
 
@@ -1793,6 +1802,18 @@ const WsMcpAppsCallToolRpc = Rpc.make(WS_METHODS.mcpAppsCallTool, {
   error: Schema.Union([McpAppRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsHermesPluginsListToolsRpc = Rpc.make(WS_METHODS.hermesPluginsListTools, {
+  payload: HermesPluginListToolsInput,
+  success: HermesPluginListToolsResult,
+  error: Schema.Union([HermesPluginRequestError, EnvironmentAuthorizationError]),
+});
+
+const WsHermesPluginsInvokeRpc = Rpc.make(WS_METHODS.hermesPluginsInvoke, {
+  payload: HermesPluginInvokeInput,
+  success: HermesPluginInvokeResult,
+  error: Schema.Union([HermesPluginRequestError, EnvironmentAuthorizationError]),
+});
+
 const WsMcpAppsToolInfoRpc = Rpc.make(WS_METHODS.mcpAppsToolInfo, {
   payload: McpAppToolInfoInput,
   success: McpAppToolInfo,
@@ -2657,6 +2678,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,
   WsMcpAppsCallToolRpc,
+  WsHermesPluginsListToolsRpc,
+  WsHermesPluginsInvokeRpc,
   WsMcpAppsToolInfoRpc,
   WsMcpAppsReadResourceRpc,
   WsMcpAppsUpdateModelContextRpc,

@@ -407,7 +407,9 @@ function sessionScopedArtifactThreadId(
       if (event.turnItem.type === "command_execution")
         return event.sessionScoped === true ? event.turnItem.threadId : undefined;
       return event.turnItem.runId === null &&
-        (event.turnItem.type === "approval_request" || event.turnItem.type === "user_input_request")
+        (event.turnItem.type === "approval_request" ||
+          event.turnItem.type === "user_input_request" ||
+          event.turnItem.type === "plugin_event")
         ? event.turnItem.threadId
         : undefined;
     default:

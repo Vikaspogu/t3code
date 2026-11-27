@@ -60,7 +60,7 @@ type Pending = {
 const SessionEvent = Schema.Struct({
   type: Schema.String,
   session_id: Schema.String,
-  payload: Schema.Unknown,
+  payload: Schema.optional(Schema.Unknown),
   replay_epoch: Schema.optional(Schema.String),
   seq: Schema.optional(Schema.Int),
   authority_epoch: Schema.optional(Schema.Int),
@@ -291,13 +291,27 @@ export class HermesGateway {
     if (this.socket !== source) return;
     try {
       const message = JSON.parse(String(data)) as {
-        id?: string | null;
+        id?: string | number | null;
         method?: unknown;
         params?: unknown;
         result?: unknown;
         error?: { code?: number; message?: string; data?: unknown };
       };
       if ("method" in message) {
+        if (message.id != null && typeof message.method === "string") {
+          source.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              error: {
+                code: -32601,
+                message: `T3 Code does not yet support Hermes ${message.method} requests`,
+              },
+            }),
+            () => {},
+          );
+          return;
+        }
         if (message.id == null && message.method === "event") {
           const addressedSession = stringField(message.params, "session_id");
           // Global broadcasts have no session stream to reconcile.

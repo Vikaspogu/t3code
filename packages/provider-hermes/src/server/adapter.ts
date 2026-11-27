@@ -105,6 +105,22 @@ const HermesProviderCapabilitiesV2 = {
   },
 };
 const DEFAULT_SETTINGS = Schema.decodeSync(HermesSettings)({});
+
+export const sessionCreateToolsets = (
+  settings: HermesSettingsValue,
+): ReadonlyArray<string> | undefined => {
+  if (!settings.pluginsEnabled) return [];
+  const toolsets = settings.toolsets
+    .split(",")
+    .map((toolset) => toolset.trim())
+    .filter((toolset) => toolset.length > 0);
+  return toolsets.length > 0 ? toolsets : undefined;
+};
+export const advanceHermesReplayCursor = (
+  current: { epoch: string; sequence: number } | null,
+  incoming: { epoch: string; sequence: number },
+) =>
+  current?.epoch === incoming.epoch && incoming.sequence <= current.sequence ? current : incoming;
 const restartRecoveryPending = "gateway_restart_recovery_pending";
 const protocolError = (detail: string, cause?: unknown): ProviderAdapter.ProviderAdapterV2Error =>
   new ProviderAdapter.ProviderAdapterProtocolError({
@@ -119,6 +135,20 @@ type RuntimeDescription = {
   readonly authority_epoch: number;
   readonly capabilities: ReadonlyArray<string>;
 };
+
+const decodeHermesSessionAttachment = Schema.decodeUnknownEffect(
+  Schema.Struct({ session_id: Schema.String }),
+);
+const decodeHermesToolsShow = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    sections: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        tools: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String })),
+      }),
+    ),
+  }),
+);
 
 export const asRuntimeDescription = (value: unknown): RuntimeDescription => {
   const runtime = value as Partial<RuntimeDescription>;
@@ -326,6 +356,178 @@ export const makeHermesAdapterV2 = (input: {
         Queue.offer(output, event).pipe(Effect.asVoid);
       const settledPrompts = new Map<string, ActiveHermesPrompt>();
 
+      type NativeHermesThread = {
+        readonly providerThreadId: ProviderThreadId;
+        readonly threadId: NonNullable<OrchestrationV2ProviderThread["appThreadId"]>;
+        readonly sessionId: string;
+        cursor: { epoch: string; sequence: number } | null;
+        retryAttempt: number;
+        active: boolean;
+        stop: Deferred.Deferred<void>;
+        stopped: Deferred.Deferred<void>;
+      };
+      const nativeThreads = new Map<ProviderThreadId, NativeHermesThread>();
+      const pluginEventSequences = new Map<string, { epoch: string; sequence: number }>();
+      const projectPluginEvent = Effect.fnUntraced(function* (
+        native: NativeHermesThread,
+        frame: unknown,
+        listenerCursor = false,
+      ) {
+        if (
+          nativeThreads.get(native.providerThreadId) !== native ||
+          stringField(frame, "session_id") !== native.sessionId
+        ) {
+          return;
+        }
+        const epoch = stringField(frame, "replay_epoch");
+        const sequence = integerField(frame, "seq");
+        if (!epoch || sequence === undefined) {
+          return yield* protocolError("Hermes plugin event has no valid replay identity");
+        }
+        if (listenerCursor) {
+          const cursor = native.cursor;
+          if (cursor && epoch === cursor.epoch && sequence <= cursor.sequence) return;
+          if (cursor && (epoch !== cursor.epoch || sequence !== cursor.sequence + 1)) {
+            return yield* protocolError("Hermes plugin event stream is not contiguous with replay");
+          }
+          native.cursor = advanceHermesReplayCursor(cursor, { epoch, sequence });
+        }
+        const eventType = stringField(frame, "type");
+        if (!eventType?.startsWith("plugin.") || !settings.pluginsEnabled) return;
+        const receiptKey = `${native.sessionId}:${eventType}`;
+        const previousReceipt = pluginEventSequences.get(receiptKey);
+        if (previousReceipt?.epoch === epoch && sequence <= previousReceipt.sequence) return;
+        pluginEventSequences.set(receiptKey, { epoch, sequence });
+        const occurredAt = yield* DateTime.now;
+        const nativeItemId = `plugin:${native.sessionId}:${epoch}:${sequence}:${eventType}`;
+        yield* emit({
+          type: "turn_item.updated",
+          driver: HERMES_PROVIDER,
+          turnItem: {
+            id: IdAllocator.derive.turnItemFromProviderItem({
+              driver: HERMES_PROVIDER,
+              nativeItemId,
+            }),
+            threadId: native.threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: native.providerThreadId,
+            providerTurnId: null,
+            nativeItemRef: {
+              driver: HERMES_PROVIDER,
+              nativeId: nativeItemId,
+              strength: "strong",
+            },
+            parentItemId: null,
+            ordinal: 0,
+            status: "completed",
+            title: eventType,
+            startedAt: occurredAt,
+            completedAt: occurredAt,
+            updatedAt: occurredAt,
+            type: "plugin_event",
+            eventType,
+            payload: recordField(frame, "payload") ?? {},
+          },
+        });
+      });
+      const stopPluginEvents = Effect.fnUntraced(function* (providerThreadId: ProviderThreadId) {
+        const native = nativeThreads.get(providerThreadId);
+        if (!native) return;
+        native.active = false;
+        Deferred.doneUnsafe(native.stop, Effect.void);
+        if (settings.pluginsEnabled) yield* Deferred.await(native.stopped);
+      });
+      const activatePluginEvents = Effect.fnUntraced(function* (
+        providerThread: OrchestrationV2ProviderThread,
+      ) {
+        const sessionId = providerThread.nativeThreadRef?.nativeId;
+        const threadId = providerThread.appThreadId;
+        if (!sessionId || !threadId)
+          return yield* protocolError("Hermes plugin events require a native session");
+        const previous = nativeThreads.get(providerThread.id);
+        if (previous?.sessionId === sessionId && previous.active) return;
+        if (previous) yield* stopPluginEvents(providerThread.id);
+        const native: NativeHermesThread =
+          previous?.sessionId === sessionId
+            ? previous
+            : {
+                providerThreadId: providerThread.id,
+                threadId,
+                sessionId,
+                cursor: null,
+                retryAttempt: 0,
+                active: true,
+                stop: Deferred.makeUnsafe<void>(),
+                stopped: Deferred.makeUnsafe<void>(),
+              };
+        native.active = true;
+        nativeThreads.set(providerThread.id, native);
+        if (!settings.pluginsEnabled) return;
+        const stop = Deferred.makeUnsafe<void>();
+        const stopped = Deferred.makeUnsafe<void>();
+        native.stop = stop;
+        native.stopped = stopped;
+        const listen: Effect.Effect<void, never> = Effect.suspend(() => {
+          if (!native.active) return Effect.void;
+          return Effect.scoped(
+            Effect.gen(function* () {
+              const connection = yield* gateway.connection;
+              const request = requestOn(connection);
+              const stored = store.get(native.threadId);
+              if (!stored || stored.sessionId !== native.sessionId) {
+                return yield* protocolError(
+                  "Hermes plugin events do not match the durable session",
+                );
+              }
+              yield* verifyTurnRuntime(request, stored);
+              const events = yield* connection.subscribeEvents(native.sessionId);
+              const resumed = yield* request("session.resume", {
+                session_id: native.sessionId,
+                omit_messages: true,
+              });
+              const attachment = yield* decodeHermesSessionAttachment(resumed);
+              if (attachment.session_id !== native.sessionId) {
+                return yield* protocolError("Hermes plugin event resume returned another session");
+              }
+              if (native.cursor) {
+                const replayed = yield* connection.replayEvents(native.sessionId, native.cursor);
+                for (const frame of replayed) yield* projectPluginEvent(native, frame, true);
+              }
+              native.retryAttempt = 0;
+              yield* Stream.runForEach(events, (frame) => projectPluginEvent(native, frame, true));
+            }),
+          ).pipe(
+            Effect.catch((cause) => {
+              native.active = false;
+              const attempt = native.retryAttempt;
+              if (attempt >= 5) {
+                return Effect.logWarning(
+                  `Hermes plugin event subscription stopped after retries: ${String(cause)}`,
+                );
+              }
+              native.retryAttempt = attempt + 1;
+              const delay = Math.min(1000 * 2 ** attempt, 30_000);
+              return Effect.logWarning(
+                `Hermes plugin event subscription interrupted: ${String(cause)}`,
+              ).pipe(
+                Effect.andThen(Effect.sleep(delay)),
+                Effect.andThen(
+                  Effect.sync(() => {
+                    native.active = true;
+                  }),
+                ),
+                Effect.andThen(listen),
+              );
+            }),
+          );
+        });
+        yield* Effect.forkIn(scope)(
+          Effect.race(listen, Deferred.await(stop)).pipe(
+            Effect.ensuring(Deferred.succeed(stopped, undefined)),
+          ),
+        );
+      });
       const verifyTurnRuntime = Effect.fnUntraced(function* (
         request: ReturnType<typeof requestOn>,
         stored: HermesThreadRecord,
@@ -342,6 +544,27 @@ export const makeHermesAdapterV2 = (input: {
           );
         }
         return runtime;
+      });
+      const verifiedPluginRequest = Effect.fnUntraced(function* (
+        providerThread: OrchestrationV2ProviderThread,
+      ) {
+        const connection = yield* gateway.connection.pipe(
+          Effect.mapError((cause) =>
+            protocolError("Could not acquire canonical Hermes connection", cause),
+          ),
+        );
+        const request = requestOn(connection);
+        const appThreadId = providerThread.appThreadId;
+        const sessionId = providerThread.nativeThreadRef?.nativeId;
+        if (!appThreadId || !sessionId) {
+          return yield* protocolError("Hermes plugins require an app thread and native session");
+        }
+        const stored = store.get(appThreadId);
+        if (!stored || stored.sessionId !== sessionId) {
+          return yield* protocolError("Hermes plugin request does not match the durable session");
+        }
+        const runtime = yield* verifyTurnRuntime(request, stored);
+        return { request, sessionId, runtime };
       });
 
       const currentProviderTurn = (
@@ -756,6 +979,11 @@ export const makeHermesAdapterV2 = (input: {
         }
 
         const type = stringField(frame, "type");
+        const native = nativeThreads.get(turn.input.providerThread.id);
+        if (type?.startsWith("plugin.")) {
+          if (native) yield* projectPluginEvent(native, frame);
+          return;
+        }
         if (
           ![
             "message.start",
@@ -1761,6 +1989,53 @@ export const makeHermesAdapterV2 = (input: {
           }
         }
       });
+      const pluginRequest = Effect.fn("HermesAdapterV2.pluginRequest")(function* (
+        providerThread: OrchestrationV2ProviderThread,
+      ) {
+        if (!settings.pluginsEnabled || !settings.pluginRpcEnabled) {
+          return yield* protocolError("Hermes plugin RPC is disabled");
+        }
+        const { request, sessionId, runtime } = yield* verifiedPluginRequest(providerThread);
+        if (!runtime.capabilities.includes("plugin-rpc-v1")) {
+          return yield* protocolError("Hermes runtime does not support plugin RPC");
+        }
+        return { request, sessionId };
+      });
+      const hermesPlugins: ProviderAdapter.ProviderAdapterV2HermesPlugins = {
+        listTools: Effect.fn("HermesAdapterV2.listPluginTools")(function* ({ providerThread }) {
+          if (!settings.pluginsEnabled) {
+            return yield* protocolError("Hermes plugins are disabled");
+          }
+          const { request, sessionId } = yield* verifiedPluginRequest(providerThread);
+          const raw = yield* request("tools.show", { session_id: sessionId });
+          const decoded = yield* decodeHermesToolsShow(raw).pipe(
+            Effect.mapError((cause) => protocolError("Invalid Hermes tools.show response", cause)),
+          );
+          return decoded.sections.flatMap((section) =>
+            section.tools.map((tool) => ({ ...tool, toolset: section.name })),
+          );
+        }),
+        invoke: Effect.fn("HermesAdapterV2.invokePlugin")(function* ({
+          providerThread,
+          method,
+          params,
+        }) {
+          if (
+            method.length > 200 ||
+            !/^plugin\.[a-z0-9_-]{1,64}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/.test(method)
+          ) {
+            return yield* protocolError("Invalid Hermes plugin method");
+          }
+          if (typeof params !== "object" || params === null || Array.isArray(params)) {
+            return yield* protocolError("Hermes plugin parameters must be an object");
+          }
+          const { request, sessionId } = yield* pluginRequest(providerThread);
+          return yield* request(method, {
+            ...(params as Record<string, unknown>),
+            session_id: sessionId,
+          });
+        }),
+      };
       const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
         instanceId: input.instanceId,
         driver: HERMES_PROVIDER,
@@ -1780,6 +2055,7 @@ export const makeHermesAdapterV2 = (input: {
         },
         canResumeAfterRestart: textTurnsEnabled,
         events: Stream.fromQueue(output),
+        hermesPlugins,
         ensureThread: Effect.fn("HermesAdapterV2.ensureThread")(function* (
           ensureInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput,
         ) {
@@ -1843,11 +2119,12 @@ export const makeHermesAdapterV2 = (input: {
             ? null
             : (reservation.sessionId ?? adoptedSessionId);
           if (!sessionId) {
+            const toolsets = sessionCreateToolsets(settings);
             const created = yield* request("session.create", {
               request_id: reservation.requestId,
               source: "cli",
               cwd: runtime.profile_id,
-              toolsets: [],
+              ...(toolsets === undefined ? {} : { toolsets }),
             });
             const createdSessionId = yield* Effect.try({
               try: () => sessionIdOf(created),
@@ -1871,7 +2148,7 @@ export const makeHermesAdapterV2 = (input: {
             return yield* protocolError("Hermes returned no durable session mapping");
           }
           const timestamp = yield* DateTime.now;
-          return {
+          const providerThread = {
             id: providerThreadId,
             driver: HERMES_PROVIDER,
             providerInstanceId: input.instanceId,
@@ -1888,6 +2165,8 @@ export const makeHermesAdapterV2 = (input: {
             createdAt: timestamp,
             updatedAt: timestamp,
           } satisfies OrchestrationV2ProviderThread;
+          yield* activatePluginEvents(providerThread);
+          return providerThread;
         }),
         resumeThread: Effect.fn("HermesAdapterV2.resumeThread")(function* (resumeInput: {
           readonly providerThread: OrchestrationV2ProviderThread;
@@ -1923,6 +2202,7 @@ export const makeHermesAdapterV2 = (input: {
               "Hermes runtime identity changed; recovery must fence this session",
             );
           }
+
           const resumed = yield* request("session.resume", { session_id: stored.sessionId });
           const resumedId = yield* Effect.try({
             try: () => resumedSessionIdOf(resumed, runtime.authority_epoch),
@@ -1931,6 +2211,7 @@ export const makeHermesAdapterV2 = (input: {
           if (resumedId !== stored.sessionId) {
             return yield* protocolError("Hermes resumed a different session");
           }
+          yield* activatePluginEvents(providerThread);
           return providerThread;
         }),
         startTurn: Effect.fn("HermesAdapterV2.startTurn")(function* (turnInput) {
@@ -2200,7 +2481,7 @@ export const makeHermesAdapterV2 = (input: {
                 : Deferred.fail(admitted, cause).pipe(Effect.asVoid),
             ),
             Effect.ensuring(
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 if (activeTurns.get(turnInput.threadId) === turn) {
                   activeTurns.delete(turnInput.threadId);
                 }

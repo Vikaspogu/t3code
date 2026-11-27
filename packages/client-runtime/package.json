@@ -603,6 +603,10 @@
       "types": "./src/mcpApps/host.ts",
       "default": "./src/mcpApps/host.ts"
     },
+    "./state/hermes-plugins": {
+      "types": "./src/state/hermesPlugins.ts",
+      "default": "./src/state/hermesPlugins.ts"
+    },
     "./state/mcp-apps": {
       "types": "./src/state/mcpApps.ts",
       "default": "./src/state/mcpApps.ts"

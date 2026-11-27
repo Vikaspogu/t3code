@@ -760,6 +760,23 @@ export type ProviderAdapterV2SubagentOutcome = {
   readonly result: OrchestrationV2Subagent["result"];
 };
 
+export interface ProviderAdapterV2HermesPluginTool {
+  readonly name: string;
+  readonly toolset: string;
+  readonly description: string;
+}
+
+export interface ProviderAdapterV2HermesPlugins {
+  readonly listTools: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+  }) => Effect.Effect<ReadonlyArray<ProviderAdapterV2HermesPluginTool>, ProviderAdapterV2Error>;
+  readonly invoke: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly method: string;
+    readonly params: unknown;
+  }) => Effect.Effect<unknown, ProviderAdapterV2Error>;
+}
+
 export interface ProviderAdapterV2SessionRuntime {
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
@@ -865,6 +882,7 @@ export interface ProviderAdapterV2SessionRuntime {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly reason?: string;
   }) => Effect.Effect<{ readonly feedbackId: string }, ProviderAdapterV2Error>;
+  readonly hermesPlugins?: ProviderAdapterV2HermesPlugins;
   /** Absent means non-interactive apps with plain tool rows. */
   readonly mcpApps?: ProviderAdapterV2McpApps;
   /** Absent when the agent has no way to sign an MCP server in. */

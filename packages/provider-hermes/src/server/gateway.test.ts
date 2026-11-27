@@ -65,7 +65,12 @@ it("delivers canonical events without confusing server requests with replies", a
   };
   socketMock.current = class extends IdleWebSocket {
     override send(data: string, callback: (error?: Error) => void): void {
-      const { id } = JSON.parse(data) as { id: string };
+      const outgoing = JSON.parse(data) as { id: string; method?: string };
+      if (!outgoing.method) {
+        callback();
+        return;
+      }
+      const { id } = outgoing;
       for (const frame of [
         {
           method: "event",
@@ -104,6 +109,49 @@ it("delivers canonical events without confusing server requests with replies", a
         );
         expect(received).toEqual([event]);
         expect(error.operation).toBe("socket");
+      }),
+    ),
+  );
+});
+
+it("rejects deferred secure server requests without waiting for a timeout", async () => {
+  const replies: Array<Record<string, unknown>> = [];
+  socketMock.current = class extends IdleWebSocket {
+    override send(data: string, callback: (error?: Error) => void): void {
+      replies.push(JSON.parse(data) as Record<string, unknown>);
+      callback();
+    }
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ ticket: "ticket-a" })),
+  );
+  const url = "ws://127.0.0.1/api/ws";
+  // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- drives native WebSocket callbacks
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const gateway = yield* HermesGateway.connect(url, "secret", hermesOrigin(url));
+        yield* gateway.connection;
+        const socket = IdleWebSocket.last!;
+        for (const method of ["sudo", "secret", "vault.unlock_prompt", "future.request"]) {
+          socket.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({ jsonrpc: "2.0", id: `srq-${method}`, method, params: {} }),
+            }),
+          );
+        }
+        expect(replies).toEqual(
+          ["sudo", "secret", "vault.unlock_prompt", "future.request"].map((method) => ({
+            jsonrpc: "2.0",
+            id: `srq-${method}`,
+            error: {
+              code: -32601,
+              message: `T3 Code does not yet support Hermes ${method} requests`,
+            },
+          })),
+        );
+        socket.close();
       }),
     ),
   );
@@ -229,6 +277,12 @@ it("replays a contiguous suffix and refuses an incomplete or foreign replay", as
     seq,
     payload: { text: "delta" },
   });
+  const pluginWithoutPayload = {
+    type: "plugin.ivan_personal.media_updated",
+    session_id: "s",
+    replay_epoch: "e",
+    seq: 3,
+  };
   let page = {
     replay_epoch: "e",
     last_sequence: 4,
@@ -238,7 +292,7 @@ it("replays a contiguous suffix and refuses an incomplete or foreign replay", as
     open_requests: [],
     snapshot_required: false,
     truncated: false,
-    events: [event(3), event(4)],
+    events: [pluginWithoutPayload, event(4)],
   };
   socketMock.current = class extends IdleWebSocket {
     override send(data: string, callback: (error?: Error) => void): void {
@@ -269,7 +323,7 @@ it("replays a contiguous suffix and refuses an incomplete or foreign replay", as
         const gateway = yield* HermesGateway.connect(url, "secret", hermesOrigin(url));
         const connection = yield* gateway.connection;
         const replay = connection.replayEvents("s", { epoch: "e", sequence: 2 });
-        expect(yield* replay).toEqual([event(3), event(4)]);
+        expect(yield* replay).toEqual([pluginWithoutPayload, event(4)]);
         const complete = page;
         for (const invalid of [
           { ...complete, snapshot_required: true },
