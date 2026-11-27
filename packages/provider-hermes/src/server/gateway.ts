@@ -71,7 +71,10 @@ const decodeSessionEvent = Schema.decodeUnknownOption(SessionEvent);
 
 const TextTurnReceipt = Schema.Struct({
   admission_id: Schema.NonEmptyString,
-  ref: Schema.Struct({ profile_id: Schema.NonEmptyString, session_id: Schema.NonEmptyString }),
+  ref: Schema.Struct({
+    profile_id: Schema.NonEmptyString,
+    session_id: Schema.NonEmptyString,
+  }),
   sequence: Schema.Int,
   status: Schema.Literals(["queued", "started", "unknown", "terminal"]),
   outcome: Schema.NullOr(Schema.String),
@@ -90,7 +93,10 @@ const decodeReceipt = Schema.decodeUnknownSync(TextTurnReceipt);
 export function decodeTextTurnReceipt(raw: unknown): HermesTextTurnReceipt {
   const receipt = decodeReceipt(raw);
   if (receipt.result?.error === null) {
-    return { ...receipt, result: { final_response: receipt.result.final_response } };
+    return {
+      ...receipt,
+      result: { final_response: receipt.result.final_response },
+    };
   }
   return receipt;
 }
@@ -205,7 +211,9 @@ export class HermesGateway {
         if (!response.ok)
           throw Object.assign(
             new Error(`Hermes ticket exchange returned HTTP ${response.status}`),
-            { status: response.status },
+            {
+              status: response.status,
+            },
           );
         return (await response.json()) as { ticket?: unknown };
       })(),
@@ -513,7 +521,11 @@ export class HermesSessionStore {
     try {
       const thread = store.get(threadId);
       if (thread?.sessionId !== sessionId) return false;
-      const submission = store.getTextTurnSubmission({ ...thread, runId, attemptId });
+      const submission = store.getTextTurnSubmission({
+        ...thread,
+        runId,
+        attemptId,
+      });
       return submission !== null;
     } finally {
       store.close();
@@ -530,6 +542,17 @@ export class HermesSessionStore {
         thread_id TEXT PRIMARY KEY,
         request_id TEXT NOT NULL UNIQUE,
         session_id TEXT UNIQUE,
+        profile_id TEXT NOT NULL,
+        instance_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        authority_epoch INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS hermes_session_replacements (
+        thread_id TEXT PRIMARY KEY REFERENCES hermes_threads(thread_id),
+        request_id TEXT NOT NULL UNIQUE,
+        previous_request_id TEXT NOT NULL,
+        previous_session_id TEXT,
         profile_id TEXT NOT NULL,
         instance_id TEXT NOT NULL,
         principal_id TEXT NOT NULL,
@@ -633,6 +656,164 @@ export class HermesSessionStore {
     return { ...input, requestId, sessionId: null };
   }
 
+  private hasUnresolvedTurn(threadId: string, sessionId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM hermes_text_turns prior
+           LEFT JOIN hermes_text_receipts receipt ON receipt.input_id = prior.input_id
+           WHERE prior.thread_id = ? AND prior.session_id = ?
+             AND json_extract(receipt.receipt_json, '$.status') IS NOT 'terminal'
+           LIMIT 1`,
+        )
+        .get(threadId, sessionId) !== undefined
+    );
+  }
+  reserveFresh(input: Omit<HermesThreadRecord, "requestId" | "sessionId">): HermesThreadRecord {
+    return this.transaction(() => {
+      const existing = this.get(input.threadId);
+      if (!existing) return this.reserve(input);
+      if (existing.profileId !== input.profileId || existing.principalId !== input.principalId) {
+        throw new Error("Hermes session identity does not match durable state");
+      }
+      if (
+        existing.instanceId === input.instanceId &&
+        input.authorityEpoch < existing.authorityEpoch
+      ) {
+        throw new Error("Hermes session authority epoch cannot move backwards");
+      }
+      if (existing.sessionId === null) {
+        return this.reserve(input);
+      }
+      if (this.hasUnresolvedTurn(input.threadId, existing.sessionId)) {
+        throw new Error("Cannot replace a Hermes session with an unresolved turn");
+      }
+
+      const pending = this.db
+        .prepare("SELECT * FROM hermes_session_replacements WHERE thread_id = ?")
+        .get(input.threadId) as Record<string, unknown> | undefined;
+      if (pending) {
+        const previousSessionId =
+          pending.previous_session_id === null ? null : String(pending.previous_session_id);
+        if (
+          String(pending.previous_request_id) !== existing.requestId ||
+          previousSessionId !== existing.sessionId ||
+          String(pending.profile_id) !== input.profileId ||
+          String(pending.principal_id) !== input.principalId
+        ) {
+          throw new Error("Hermes thread replacement does not match durable state");
+        }
+        if (
+          String(pending.instance_id) === input.instanceId &&
+          input.authorityEpoch < Number(pending.authority_epoch)
+        ) {
+          throw new Error("Hermes session authority epoch cannot move backwards");
+        }
+        const sameAuthority =
+          String(pending.instance_id) === input.instanceId &&
+          Number(pending.authority_epoch) === input.authorityEpoch;
+        const previousRequestId = String(pending.request_id);
+        const requestId = sameAuthority ? previousRequestId : `t3-${NodeCrypto.randomUUID()}`;
+        const updated = this.db
+          .prepare(
+            `UPDATE hermes_session_replacements SET request_id = ?, instance_id = ?, authority_epoch = ?
+             WHERE thread_id = ? AND request_id = ?`,
+          )
+          .run(
+            requestId,
+            input.instanceId,
+            input.authorityEpoch,
+            input.threadId,
+            previousRequestId,
+          );
+        if (updated.changes !== 1) {
+          throw new Error("Hermes thread replacement changed during reservation");
+        }
+        return { ...input, requestId, sessionId: existing.sessionId };
+      }
+
+      const requestId = `t3-${NodeCrypto.randomUUID()}`;
+      this.db
+        .prepare(
+          `INSERT INTO hermes_session_replacements
+           (thread_id, request_id, previous_request_id, previous_session_id, profile_id, instance_id, principal_id, authority_epoch)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.threadId,
+          requestId,
+          existing.requestId,
+          existing.sessionId,
+          input.profileId,
+          input.instanceId,
+          input.principalId,
+          input.authorityEpoch,
+        );
+      return { ...input, requestId, sessionId: existing.sessionId };
+    });
+  }
+
+  bindFresh(
+    threadId: string,
+    requestId: string,
+    previousSessionId: string | null,
+    sessionId: string,
+  ): HermesThreadRecord {
+    return this.transaction(() => {
+      const current = this.get(threadId);
+      const pending = this.db
+        .prepare("SELECT * FROM hermes_session_replacements WHERE thread_id = ? AND request_id = ?")
+        .get(threadId, requestId) as Record<string, unknown> | undefined;
+      if (!pending) {
+        if (current?.requestId === requestId && current.sessionId === sessionId) return current;
+        if (previousSessionId !== null) throw new Error("Hermes thread replacement is missing");
+        return this.bind(threadId, requestId, sessionId);
+      }
+
+      const expectedSessionId =
+        pending.previous_session_id === null ? null : String(pending.previous_session_id);
+      if (
+        !current ||
+        current.requestId !== String(pending.previous_request_id) ||
+        current.sessionId !== expectedSessionId ||
+        expectedSessionId !== previousSessionId ||
+        current.profileId !== String(pending.profile_id) ||
+        current.principalId !== String(pending.principal_id)
+      ) {
+        throw new Error("Hermes thread replacement does not match durable state");
+      }
+      if (expectedSessionId !== null && this.hasUnresolvedTurn(threadId, expectedSessionId)) {
+        throw new Error("Cannot replace a Hermes session with an unresolved turn");
+      }
+      const result = this.db
+        .prepare(
+          `UPDATE hermes_threads
+           SET request_id = ?, session_id = ?, profile_id = ?, instance_id = ?, principal_id = ?, authority_epoch = ?
+           WHERE thread_id = ? AND request_id = ? AND session_id IS ?`,
+        )
+        .run(
+          requestId,
+          sessionId,
+          String(pending.profile_id),
+          String(pending.instance_id),
+          String(pending.principal_id),
+          Number(pending.authority_epoch),
+          threadId,
+          String(pending.previous_request_id),
+          expectedSessionId,
+        );
+      if (result.changes !== 1) throw new Error("Hermes thread replacement changed during binding");
+      this.db
+        .prepare("DELETE FROM hermes_session_replacements WHERE thread_id = ? AND request_id = ?")
+        .run(threadId, requestId);
+      const bound = this.get(threadId);
+      if (!bound || bound.requestId !== requestId || bound.sessionId !== sessionId) {
+        throw new Error("Hermes thread replacement did not persist");
+      }
+      return bound;
+    });
+  }
+
   bind(threadId: string, requestId: string, sessionId: string): HermesThreadRecord {
     const current = this.get(threadId);
     if (!current || current.requestId !== requestId)
@@ -683,7 +864,11 @@ export class HermesSessionStore {
       readonly text: string;
       readonly image?: Omit<HermesPendingImage, "inputId" | "sessionId" | "uploadClaimed">;
     },
-  ): { readonly session_id: string; readonly input_id: string; readonly text: string } {
+  ): {
+    readonly session_id: string;
+    readonly input_id: string;
+    readonly text: string;
+  } {
     const {
       threadId,
       runId,
@@ -696,16 +881,6 @@ export class HermesSessionStore {
       text,
       image,
     } = input;
-    const stored = this.get(threadId);
-    if (
-      stored?.sessionId !== sessionId ||
-      stored.profileId !== profileId ||
-      stored.instanceId !== instanceId ||
-      stored.principalId !== principalId ||
-      stored.authorityEpoch !== authorityEpoch
-    ) {
-      throw new Error("Hermes turn does not match the durable session mapping");
-    }
 
     // Keep the legacy string encoding for text-only turns. Retain the image digest after staging bytes are gone.
     const textJson = JSON.stringify(
@@ -726,6 +901,16 @@ export class HermesSessionStore {
         : text,
     );
     return this.transaction(() => {
+      const stored = this.get(threadId);
+      if (
+        stored?.sessionId !== sessionId ||
+        stored.profileId !== profileId ||
+        stored.instanceId !== instanceId ||
+        stored.principalId !== principalId ||
+        stored.authorityEpoch !== authorityEpoch
+      ) {
+        throw new Error("Hermes turn does not match the durable session mapping");
+      }
       const inserted = this.db
         .prepare(
           `INSERT INTO hermes_text_turns
@@ -757,6 +942,37 @@ export class HermesSessionStore {
           runId,
         );
 
+      if (inserted.changes === 0) {
+        this.db
+          .prepare(
+            `UPDATE hermes_text_turns SET attempt_id = ?
+             WHERE thread_id = ? AND run_id = ? AND session_id = ? AND profile_id = ?
+               AND instance_id = ? AND principal_id = ? AND authority_epoch = ? AND text_json = ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM hermes_text_turns prior
+                 LEFT JOIN hermes_text_receipts receipt ON receipt.input_id = prior.input_id
+                 WHERE prior.profile_id = ? AND prior.session_id = ?
+                   AND (prior.thread_id <> ? OR prior.run_id <> ?)
+                   AND json_extract(receipt.receipt_json, '$.status') IS NOT 'terminal'
+               )`,
+          )
+          .run(
+            attemptId,
+            threadId,
+            runId,
+            sessionId,
+            profileId,
+            instanceId,
+            principalId,
+            authorityEpoch,
+            textJson,
+            profileId,
+            sessionId,
+            threadId,
+            runId,
+          );
+      }
+
       const row = this.db
         .prepare(
           `SELECT input_id FROM hermes_text_turns
@@ -780,7 +996,11 @@ export class HermesSessionStore {
         );
       }
       if (image && inserted.changes === 1) {
-        this.reservePendingImage({ inputId: row.input_id, sessionId, ...image });
+        this.reservePendingImage({
+          inputId: row.input_id,
+          sessionId,
+          ...image,
+        });
       }
       return { session_id: sessionId, input_id: row.input_id, text };
     });
@@ -791,7 +1011,11 @@ export class HermesSessionStore {
       readonly runId: string;
       readonly attemptId: string;
     },
-  ): { readonly session_id: string; readonly input_id: string; readonly text: string } | null {
+  ): {
+    readonly session_id: string;
+    readonly input_id: string;
+    readonly text: string;
+  } | null {
     const row = this.db
       .prepare(
         `SELECT input_id, session_id, text_json FROM hermes_text_turns
@@ -946,7 +1170,10 @@ export class HermesSessionStore {
     readonly sessionId: string;
     readonly profileId: string;
     readonly principalId: string;
-  }): ReadonlyArray<{ readonly inputId: string; readonly receipt: HermesTextTurnReceipt | null }> {
+  }): ReadonlyArray<{
+    readonly inputId: string;
+    readonly receipt: HermesTextTurnReceipt | null;
+  }> {
     const rows = this.db
       .prepare(
         `SELECT prior.input_id, receipt.receipt_json FROM hermes_text_turns prior
@@ -1109,7 +1336,11 @@ export class HermesSessionStore {
     inputId: string,
     admissionId: string,
     raw: unknown,
-  ): { readonly promptId: string; readonly kind: "approval" | "clarify"; readonly state: string } {
+  ): {
+    readonly promptId: string;
+    readonly kind: "approval" | "clarify";
+    readonly state: string;
+  } {
     const kind = recordField(raw, "kind");
     const promptId = stringField(raw, "prompt_id");
     const generation = integerField(raw, "execution_generation");

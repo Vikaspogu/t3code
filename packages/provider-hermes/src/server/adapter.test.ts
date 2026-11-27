@@ -108,6 +108,60 @@ describe("HermesSessionStore", () => {
     }
   });
 
+  it("does not reassign a retry while another turn is unresolved", () => {
+    const store = new HermesSessionStore(
+      NodePath.join(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hermes-retry-guard-")),
+        "state.sqlite3",
+      ),
+    );
+    const identity = {
+      threadId: "thread-1",
+      profileId: "profile-1",
+      instanceId: "instance-1",
+      principalId: "uid:1000",
+      authorityEpoch: 1,
+    };
+    try {
+      const reservation = store.reserve(identity);
+      store.bind(identity.threadId, reservation.requestId, "session-1");
+      const completedTurn = {
+        ...identity,
+        sessionId: "session-1",
+        runId: "run-complete",
+        attemptId: "attempt-old",
+        text: "complete",
+      };
+      const completed = store.reserveTextTurn(completedTurn);
+      const started = {
+        admission_id: "admission-complete",
+        ref: { profile_id: identity.profileId, session_id: "session-1" },
+        sequence: 1,
+        status: "started",
+        outcome: null,
+        authority_epoch: 1,
+        execution_generation: 1,
+      };
+      store.recordTextTurnReceipt(completed.input_id, started);
+      store.recordTextTurnReceipt(completed.input_id, {
+        ...started,
+        status: "terminal",
+        outcome: "completed",
+      });
+      store.reserveTextTurn({
+        ...completedTurn,
+        runId: "run-pending",
+        attemptId: "attempt-pending",
+      });
+      expect(() => store.reserveTextTurn({ ...completedTurn, attemptId: "attempt-new" })).toThrow(
+        "unresolved",
+      );
+      expect(store.getTextTurnSubmission(completedTurn)?.input_id).toBe(completed.input_id);
+    } finally {
+      store.close();
+    }
+  });
+
   it("keeps image intent immutable across turn reservation retries", () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hermes-image-intent-"));
     cleanups.push(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
@@ -148,11 +202,17 @@ describe("HermesSessionStore", () => {
         bytes: 4,
       });
       expect(() =>
-        store.reserveTextTurn({ ...turn, image: { ...image, contentBase64: "BAUGBw==" } }),
+        store.reserveTextTurn({
+          ...turn,
+          image: { ...image, contentBase64: "BAUGBw==" },
+        }),
       ).toThrow("different input");
       const { contentBase64, ...metadata } = image;
       expect(
-        store.reserveTextTurn({ ...turn, image: { contentBase64, ...metadata } }).input_id,
+        store.reserveTextTurn({
+          ...turn,
+          image: { contentBase64, ...metadata },
+        }).input_id,
       ).toBe(inputId);
       expect(store.getPendingImage(inputId)).toBeNull();
     } finally {
@@ -195,7 +255,10 @@ describe("HermesSessionStore", () => {
         text: "input",
       }).input_id;
       expect(() =>
-        store.recordTextTurnReceipt(inputId, { ...started, authority_epoch: 2 }),
+        store.recordTextTurnReceipt(inputId, {
+          ...started,
+          authority_epoch: 2,
+        }),
       ).toThrow();
       expect(() =>
         store.recordTextTurnReceipt(inputId, {
@@ -204,7 +267,13 @@ describe("HermesSessionStore", () => {
         }),
       ).toThrow();
       expect(store.getTextTurnReceipt(inputId)).toBeNull();
-      const next = { ...identity, sessionId, runId: "run-2", attemptId: "attempt-2", text: "next" };
+      const next = {
+        ...identity,
+        sessionId,
+        runId: "run-2",
+        attemptId: "attempt-2",
+        text: "next",
+      };
       const secondConnection = new HermesSessionStore(path);
       try {
         expect(() => secondConnection.reserveTextTurn(next)).toThrow("unresolved");
@@ -233,10 +302,16 @@ describe("HermesSessionStore", () => {
         secondConnection.close();
       }
       expect(() =>
-        store.recordTextTurnReceipt(inputId, { ...terminal, admission_id: "other" }),
+        store.recordTextTurnReceipt(inputId, {
+          ...terminal,
+          admission_id: "other",
+        }),
       ).toThrow();
       expect(() =>
-        store.recordTextTurnReceipt(inputId, { ...terminal, execution_generation: 3 }),
+        store.recordTextTurnReceipt(inputId, {
+          ...terminal,
+          execution_generation: 3,
+        }),
       ).toThrow();
       expect(store.recordTextTurnReceipt(inputId, terminal)).toEqual(terminal);
     } finally {
@@ -247,10 +322,21 @@ describe("HermesSessionStore", () => {
       expect(reopened.getTextTurnReceipt(inputId)).toEqual(terminal);
       expect(() => reopened.recordTextTurnReceipt(inputId, started)).toThrow();
       expect(reopened.recordTextTurnReceipt(inputId, terminal)).toEqual(terminal);
+      const replacement = reopened.reserveFresh(identity);
+      reopened.bindFresh(replacement.threadId, replacement.requestId, sessionId, "session-2");
+      expect(() =>
+        reopened.reserveTextTurn({
+          ...identity,
+          sessionId: "session-2",
+          runId: "run-1",
+          attemptId: "attempt-1",
+          text: "input",
+        }),
+      ).toThrow(/different input|unresolved/);
       expect(
         reopened.reserveTextTurn({
           ...identity,
-          sessionId,
+          sessionId: "session-2",
           runId: "run-2",
           attemptId: "attempt-2",
           text: "next",
@@ -290,9 +376,140 @@ describe("HermesSessionStore", () => {
     cleanups.push(() => reopened.close());
     expect(reopened.get("thread-a")?.sessionId).toBe("session-a");
     expect(() => reopened.reserve({ ...identity, instanceId: "instance-b" })).toThrow(/identity/);
+    expect(() => reopened.reserveFresh({ ...identity, principalId: "uid:other" })).toThrow(
+      /identity/,
+    );
+    expect(() => reopened.reserveFresh({ ...identity, profileId: "/other" })).toThrow(/identity/);
+    expect(() => reopened.reserveFresh({ ...identity, authorityEpoch: 3 })).toThrow(/epoch/);
     expect(reopened.reserve({ ...identity, threadId: "thread-b" }).requestId).not.toBe(
       reservation.requestId,
     );
+    const activeTurn = reopened.reserveTextTurn({
+      ...identity,
+      sessionId: "session-a",
+      runId: "run-fresh",
+      attemptId: "attempt-a",
+      text: "retry",
+    });
+    expect(() => reopened.reserveFresh(identity)).toThrow(/unresolved turn/);
+    const activeReceipt = {
+      admission_id: "admission-active",
+      ref: { profile_id: identity.profileId, session_id: "session-a" },
+      sequence: 1,
+      status: "started",
+      outcome: null,
+      authority_epoch: identity.authorityEpoch,
+      execution_generation: 1,
+    };
+    reopened.recordTextTurnReceipt(activeTurn.input_id, activeReceipt);
+    reopened.recordTextTurnReceipt(activeTurn.input_id, {
+      ...activeReceipt,
+      status: "terminal",
+      outcome: "completed",
+    });
+    const fresh = reopened.reserveFresh(identity);
+    expect(fresh.sessionId).toBe("session-a");
+    expect(reopened.reserveFresh(identity).requestId).toBe(fresh.requestId);
+    const pendingAuthority = reopened.reserveFresh({
+      ...identity,
+      instanceId: "instance-pending",
+    });
+    expect(pendingAuthority.requestId).not.toBe(fresh.requestId);
+    expect(() =>
+      reopened.reserveFresh({
+        ...identity,
+        instanceId: "instance-pending",
+        authorityEpoch: 3,
+      }),
+    ).toThrow(/epoch/);
+    expect(reopened.reserveFresh({ ...identity, instanceId: "instance-pending" }).requestId).toBe(
+      pendingAuthority.requestId,
+    );
+    const racingTurn = reopened.reserveTextTurn({
+      ...identity,
+      sessionId: "session-a",
+      runId: "run-racing",
+      attemptId: "attempt-racing",
+      text: "racing",
+    });
+    expect(() =>
+      reopened.bindFresh(
+        pendingAuthority.threadId,
+        pendingAuthority.requestId,
+        pendingAuthority.sessionId,
+        "session-b",
+      ),
+    ).toThrow(/unresolved turn/);
+    reopened.recordTextTurnReceipt(racingTurn.input_id, {
+      ...activeReceipt,
+      admission_id: "admission-racing",
+    });
+    reopened.recordTextTurnReceipt(racingTurn.input_id, {
+      ...activeReceipt,
+      admission_id: "admission-racing",
+      status: "terminal",
+      outcome: "completed",
+    });
+    expect(() =>
+      reopened.bindFresh(fresh.threadId, fresh.requestId, fresh.sessionId, "session-stale"),
+    ).toThrow(/missing/);
+    expect(fresh.requestId).not.toBe(reservation.requestId);
+    expect(reopened.get("thread-a")?.sessionId).toBe("session-a");
+    reopened.bindFresh(
+      pendingAuthority.threadId,
+      pendingAuthority.requestId,
+      pendingAuthority.sessionId,
+      "session-b",
+    );
+    expect(
+      reopened.bindFresh(
+        pendingAuthority.threadId,
+        pendingAuthority.requestId,
+        pendingAuthority.sessionId,
+        "session-b",
+      ),
+    ).toEqual(reopened.get("thread-a"));
+    expect(reopened.get("thread-a")?.sessionId).toBe("session-b");
+    expect(() =>
+      reopened.reserveTextTurn({
+        ...identity,
+        instanceId: "instance-pending",
+        sessionId: "session-a",
+        runId: "run-stale",
+        attemptId: "attempt-stale",
+        text: "stale",
+      }),
+    ).toThrow(/durable session mapping/);
+    expect(() =>
+      reopened.reserveTextTurn({
+        ...identity,
+        instanceId: "instance-pending",
+        sessionId: "session-b",
+        runId: "run-fresh",
+        attemptId: "attempt-b",
+        text: "retry",
+      }),
+    ).toThrow(/different input|unresolved/);
+    const unboundFresh = reopened.reserveFresh({
+      ...identity,
+      threadId: "thread-unbound",
+    });
+    expect(unboundFresh.requestId).not.toBe(reReserved.requestId);
+    expect(reopened.reserveFresh({ ...identity, threadId: "thread-unbound" }).requestId).toBe(
+      unboundFresh.requestId,
+    );
+    const drifted = reopened.reserveFresh({
+      ...identity,
+      instanceId: "instance-b",
+    });
+    expect(drifted.sessionId).toBe("session-b");
+    expect(reopened.get("thread-a")?.sessionId).toBe("session-b");
+    expect(reopened.get("thread-a")?.instanceId).toBe("instance-pending");
+    reopened.bindFresh(drifted.threadId, drifted.requestId, drifted.sessionId, "session-c");
+    expect(reopened.get("thread-a")).toMatchObject({
+      instanceId: "instance-b",
+      sessionId: "session-c",
+    });
   });
 });
 
@@ -301,7 +518,10 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
     Effect.gen(function* () {
       const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hermes-adapter-"));
       cleanups.push(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
-      const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+      const calls: Array<{
+        method: string;
+        params: Record<string, unknown>;
+      }> = [];
 
       const runtime = {
         profile_id: "/profile",
@@ -309,7 +529,10 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
         authority_epoch: 4,
         capabilities: ["durable-admission-v1", "event-replay-v1"],
       };
-      const sockets: Array<{ close: () => void; dispatchEvent: (event: Event) => boolean }> = [];
+      const sockets: Array<{
+        close: () => void;
+        dispatchEvent: (event: Event) => boolean;
+      }> = [];
       let failResume = false;
       let dropAfterDescribe = false;
       let resumeEpoch = runtime.authority_epoch;
@@ -350,7 +573,12 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
             rpc.method === "runtime.describe"
               ? runtime
               : rpc.method === "session.create"
-                ? { session_id: "session-a" }
+                ? {
+                    session_id:
+                      calls.filter(({ method }) => method === "session.create").length > 1
+                        ? "session-b"
+                        : "session-a",
+                  }
                 : rpc.method === "session.resume"
                   ? {
                       session_id: redirectedSessionId ?? params.session_id,
@@ -370,7 +598,9 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
                       jsonrpc: "2.0",
                       id: rpc.id,
                       ...(failResume && rpc.method === "session.resume"
-                        ? { error: { code: -32601, message: "resume failed" } }
+                        ? {
+                            error: { code: -32601, message: "resume failed" },
+                          }
                         : { result }),
                     }),
               }),
@@ -435,7 +665,12 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
             modelSelection,
             runtimePolicy,
           });
-          const ensured = yield* opened.ensureThread({ threadId, modelSelection, runtimePolicy });
+          const ensured = yield* opened.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+            forceNewNativeThread: true,
+          });
           expect(fetchMock.mock.calls[0]![0].toString()).toBe(
             "http://hermes.test/api/webapp/socket-ticket?socket=gateway",
           );
@@ -444,7 +679,11 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
           });
           expect(fetchMock.mock.calls[0]![1]?.signal).toBeInstanceOf(AbortSignal);
           sockets.at(-1)!.close();
-          const repeated = yield* opened.ensureThread({ threadId, modelSelection, runtimePolicy });
+          const repeated = yield* opened.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
           expect(repeated.nativeThreadRef).toEqual(ensured.nativeThreadRef);
           expect(sockets).toHaveLength(2);
           sockets[0]!.dispatchEvent(new Event("close"));
@@ -524,18 +763,33 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
           runtime.authority_epoch = 4;
           runtime.profile_id = "relative-profile";
           expect(
-            (yield* Effect.flip(opened.ensureThread({ threadId, modelSelection, runtimePolicy })))
-              ._tag,
+            (yield* Effect.flip(
+              opened.ensureThread({
+                threadId,
+                modelSelection,
+                runtimePolicy,
+              }),
+            ))._tag,
           ).toBe("ProviderAdapterProtocolError");
           runtime.profile_id = "C:\\profile";
           expect(
-            (yield* Effect.flip(opened.ensureThread({ threadId, modelSelection, runtimePolicy })))
-              ._tag,
+            (yield* Effect.flip(
+              opened.ensureThread({
+                threadId,
+                modelSelection,
+                runtimePolicy,
+              }),
+            ))._tag,
           ).toBe("ProviderAdapterProtocolError");
           runtime.profile_id = "/other";
           expect(
-            (yield* Effect.flip(opened.ensureThread({ threadId, modelSelection, runtimePolicy })))
-              ._tag,
+            (yield* Effect.flip(
+              opened.ensureThread({
+                threadId,
+                modelSelection,
+                runtimePolicy,
+              }),
+            ))._tag,
           ).toBe("ProviderAdapterProtocolError");
           runtime.profile_id = "/profile";
           expect(
@@ -580,11 +834,20 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
           expect((yield* Effect.flip(opened.startTurn({} as never)))._tag).toBe(
             "ProviderAdapterProtocolError",
           );
+          const replacement = yield* opened.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+            existingProviderThread: ensured,
+            forceNewNativeThread: true,
+          });
+          expect(replacement.id).toBe(ensured.id);
+          expect(replacement.nativeThreadRef?.nativeId).toBe("session-b");
           return ensured;
         }),
       );
       expect(thread.nativeThreadRef?.nativeId).toBe("session-a");
-      expect(calls.filter(({ method }) => method === "session.create")).toHaveLength(1);
+      expect(calls.filter(({ method }) => method === "session.create")).toHaveLength(2);
       expect(calls.find(({ method }) => method === "session.create")?.params.request_id).toMatch(
         /^t3-/,
       );
@@ -611,12 +874,20 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
         HERMES_ALLOW_CLEARTEXT: "1",
       };
       const instanceId = ProviderInstanceId.make("hermes-test");
-      const adapter = makeHermesAdapterV2({ instanceId, settings, environment });
+      const adapter = makeHermesAdapterV2({
+        instanceId,
+        settings,
+        environment,
+      });
       const input = {
         threadId: ThreadId.make("thread-config"),
         providerSessionId: ProviderSessionId.make("provider-session-config"),
         modelSelection: { instanceId, model: "default" },
-        runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" } as const,
+        runtimePolicy: {
+          cwd,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        } as const,
       };
       const openError = () => Effect.scoped(Effect.flip(adapter.openSession(input)));
       expect((yield* openError())._tag).toBe("ProviderAdapterProtocolError");
@@ -645,7 +916,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
 
   const installSocket = () => {
     const state = {
-      calls: [] as Array<{ method: string; params: Record<string, unknown>; socket: number }>,
+      calls: [] as Array<{
+        method: string;
+        params: Record<string, unknown>;
+        socket: number;
+      }>,
       submissions: [] as Array<Record<string, unknown>>,
       admissions: new Map<
         string,
@@ -757,7 +1032,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
         }
         callback();
         const params = rpc.params ?? {};
-        state.calls.push({ method: rpc.method, params, socket: this.socketNumber });
+        state.calls.push({
+          method: rpc.method,
+          params,
+          socket: this.socketNumber,
+        });
         queueMicrotask(() => {
           if (rpc.method === "runtime.describe") {
             this.respond(rpc.id, {
@@ -783,7 +1062,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
                         command: "rm -rf /tmp/example",
                         choices: state.prompt.choices ?? ["once", "session", "always", "deny"],
                       }
-                    : { question: "Continue?", choices: ["yes", "no"], multi_select: false }),
+                    : {
+                        question: "Continue?",
+                        choices: ["yes", "no"],
+                        multi_select: false,
+                      }),
                 }
               : null;
             const pending =
@@ -838,7 +1121,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
                 authority_epoch: recovered.ownerEpoch,
                 execution_generation: 1,
                 admission_id: recovered.admission,
-                payload: { status: "complete", outcome: recovered.outcome, text: recovered.text },
+                payload: {
+                  status: "complete",
+                  outcome: recovered.outcome,
+                  text: recovered.text,
+                },
               };
               state.events.push(complete);
               queueMicrotask(() => this.event(complete));
@@ -983,14 +1270,26 @@ describe("HermesAdapterV2 G2 text turns", () => {
                 ? [
                     {
                       type: "message.complete",
-                      payload: { text: "", content: "", admission_id: admission, outcome },
+                      payload: {
+                        text: "",
+                        content: "",
+                        admission_id: admission,
+                        outcome,
+                      },
                     },
                   ]
                 : [
-                    { type: "message.start", payload: { role: "assistant", part_id: "part-1" } },
+                    {
+                      type: "message.start",
+                      payload: { role: "assistant", part_id: "part-1" },
+                    },
                     ...deltas.map((delta) => ({
                       type: "message.delta",
-                      payload: { part_id: "part-1", role: "assistant", text: delta },
+                      payload: {
+                        part_id: "part-1",
+                        role: "assistant",
+                        text: delta,
+                      },
                     })),
                     {
                       type: "message.complete",
@@ -1052,7 +1351,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
                         command: "rm -rf /tmp/example",
                         choices: state.prompt.choices ?? ["once", "session", "always", "deny"],
                       }
-                    : { question: "Continue?", choices: ["yes", "no"], multi_select: false }),
+                    : {
+                        question: "Continue?",
+                        choices: ["yes", "no"],
+                        multi_select: false,
+                      }),
                 },
               };
               state.events.push(prompt);
@@ -1140,7 +1443,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
                 authority_epoch: authorityFor(this.socketNumber),
                 admission_id: admissionId,
                 execution_generation: 1,
-                payload: { prompt_id: prompt.promptId, execution_generation: 1 },
+                payload: {
+                  prompt_id: prompt.promptId,
+                  execution_generation: 1,
+                },
               };
               const complete = {
                 type: "message.complete",
@@ -1150,7 +1456,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
                 authority_epoch: authorityFor(this.socketNumber),
                 admission_id: admissionId,
                 execution_generation: 1,
-                payload: { status: "complete", outcome: "completed", text: "answered" },
+                payload: {
+                  status: "complete",
+                  outcome: "completed",
+                  text: "answered",
+                },
               };
               state.events.push(settled, complete);
               if (prompt.promptId === "approval-4") {
@@ -1251,7 +1561,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
       creationSource: "web",
     },
     modelSelection,
-    runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+    runtimePolicy: {
+      cwd,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+    },
   });
 
   const runSelectionTurn = (
@@ -1265,17 +1579,29 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
+        const adapter = makeHermesAdapterV2({
+          instanceId,
+          settings,
+          enableTextTurns: true,
+        });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-mutation"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const transition = yield* adapter.planSelectionTransition({
           current: modelSelection,
@@ -1350,17 +1676,29 @@ describe("HermesAdapterV2 G2 text turns", () => {
         }
       })();
 
-      const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
+      const adapter = makeHermesAdapterV2({
+        instanceId,
+        settings,
+        enableTextTurns: true,
+      });
       const opened = yield* adapter.openSession({
         threadId,
         providerSessionId: ProviderSessionId.make("provider-session-g2"),
         modelSelection,
-        runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+        runtimePolicy: {
+          cwd,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
       });
       const providerThread = yield* opened.ensureThread({
         threadId,
         modelSelection,
-        runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+        runtimePolicy: {
+          cwd,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
       });
       const terminalQueue = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
       const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
@@ -1441,11 +1779,17 @@ describe("HermesAdapterV2 G2 text turns", () => {
           state.omitSubmitResult = true;
         });
 
-        expect(terminal).toMatchObject({ type: "turn.terminal", status: "completed" });
+        expect(terminal).toMatchObject({
+          type: "turn.terminal",
+          status: "completed",
+        });
         expect(observed).toContainEqual(
           expect.objectContaining({
             type: "message.updated",
-            message: expect.objectContaining({ text: "joined", streaming: false }),
+            message: expect.objectContaining({
+              text: "joined",
+              streaming: false,
+            }),
           }),
         );
         expect(state.submissions).toHaveLength(1);
@@ -1460,7 +1804,9 @@ describe("HermesAdapterV2 G2 text turns", () => {
         ]);
         const db = new NodeSqlite.DatabaseSync(
           NodePath.join(directory, "state", "sessions.sqlite3"),
-          { readOnly: true },
+          {
+            readOnly: true,
+          },
         );
         try {
           const row = db
@@ -1581,7 +1927,9 @@ describe("HermesAdapterV2 G2 text turns", () => {
       Effect.gen(function* () {
         const state = installSocket();
         const error = yield* Effect.flip(runD6Turn(state, undefined, false));
-        expect(error).toMatchObject({ detail: "Hermes resume does not match the original run" });
+        expect(error).toMatchObject({
+          detail: "Hermes resume does not match the original run",
+        });
         expect(state.submissions).toEqual([]);
       }),
     ),
@@ -1644,7 +1992,9 @@ describe("HermesAdapterV2 G2 text turns", () => {
               resume: true,
             }),
           ),
-        ).toMatchObject({ detail: "Hermes turn does not match the durable pinned identity" });
+        ).toMatchObject({
+          detail: "Hermes turn does not match the durable pinned identity",
+        });
         expect(state.calls.slice(checkpoint).map(({ method }) => method)).toEqual([
           "runtime.describe",
           "runtime.describe",
@@ -1678,17 +2028,29 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
+        const adapter = makeHermesAdapterV2({
+          instanceId,
+          settings,
+          enableTextTurns: true,
+        });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g2"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
         const terminalQueue = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -1757,13 +2119,20 @@ describe("HermesAdapterV2 G2 text turns", () => {
           opened.interruptTurn({
             providerThread: {
               ...providerThread,
-              nativeThreadRef: { ...providerThread.nativeThreadRef!, nativeId: "foreign-session" },
+              nativeThreadRef: {
+                ...providerThread.nativeThreadRef!,
+                nativeId: "foreign-session",
+              },
             },
             providerTurnId,
           }),
         );
         yield* Effect.flip(
-          opened.interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true }),
+          opened.interruptTurn({
+            providerThread,
+            providerTurnId,
+            requestRuntimeRestart: true,
+          }),
         );
         const wrongTurn = yield* Effect.flip(
           opened.interruptTurn({
@@ -1788,7 +2157,9 @@ describe("HermesAdapterV2 G2 text turns", () => {
           const result = yield* Effect.result(
             opened.interruptTurn({ providerThread, providerTurnId }),
           );
-          expect(result, JSON.stringify(wrongAck)).toMatchObject({ _tag: "Failure" });
+          expect(result, JSON.stringify(wrongAck)).toMatchObject({
+            _tag: "Failure",
+          });
         }
         state.interruptAck = {};
         yield* opened.interruptTurn({ providerThread, providerTurnId });
@@ -1804,7 +2175,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
         expect(observed.filter((event) => event.type === "turn.terminal")).toHaveLength(2);
         state.finishTurn!();
         const interrupted = yield* takeTerminal();
-        expect(interrupted).toMatchObject({ status: "cancelled", threadDisposition: "reusable" });
+        expect(interrupted).toMatchObject({
+          status: "cancelled",
+          threadDisposition: "reusable",
+        });
         yield* Effect.flip(opened.interruptTurn({ providerThread, providerTurnId }));
 
         state.nextOutcome = "cancelled";
@@ -1812,7 +2186,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
         yield* opened.startTurn(turnInput(providerThread, cwd, 4, "cancelled before claim"));
         const queuedTurnId = yield* takeRunning();
         const queuedStop = yield* Effect.flip(
-          opened.interruptTurn({ providerThread, providerTurnId: queuedTurnId }),
+          opened.interruptTurn({
+            providerThread,
+            providerTurnId: queuedTurnId,
+          }),
         );
         expect(queuedStop).toMatchObject({
           detail: "Hermes interrupt requires a verified started receipt",
@@ -1856,7 +2233,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
         expect(recoveredMessages).toEqual([
           streamed,
           expect.objectContaining({
-            message: expect.objectContaining({ text: "replayed", streaming: false }),
+            message: expect.objectContaining({
+              text: "replayed",
+              streaming: false,
+            }),
           }),
         ]);
       }),
@@ -1887,12 +2267,20 @@ describe("HermesAdapterV2 G2 text turns", () => {
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-identity"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
@@ -1921,7 +2309,9 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const next = yield* Effect.flip(
           opened.startTurn(turnInput(providerThread, cwd, 2, "do not admit more work")),
         );
-        expect(next).toMatchObject({ detail: "Could not reserve exact Hermes turn input" });
+        expect(next).toMatchObject({
+          detail: "Could not reserve exact Hermes turn input",
+        });
         expect(observed.filter((event) => event.type === "message.updated")).toHaveLength(0);
         expect(state.submissions).toHaveLength(1);
         expect(state.calls.filter((call) => call.method === "session.events.since")).toHaveLength(
@@ -1953,19 +2343,29 @@ describe("HermesAdapterV2 G2 text turns", () => {
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-replay-receipt"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
 
         const error = yield* Effect.flip(
           opened.startTurn(turnInput(providerThread, cwd, 1, "never journal a foreign retry")),
         );
 
-        expect(error).toMatchObject({ detail: "Hermes receipt does not match the replayed turn" });
+        expect(error).toMatchObject({
+          detail: "Hermes receipt does not match the replayed turn",
+        });
         expect(state.submissions).toHaveLength(2);
         const store = new HermesSessionStore(NodePath.join(directory, "state", "sessions.sqlite3"));
         expect(store.getTextTurnReceipt(String(state.submissions[0]!.input_id))).toBeNull();
@@ -2000,12 +2400,20 @@ describe("HermesAdapterV2 G2 text turns", () => {
           threadId,
           providerSessionId: ProviderSessionId.make(`provider-session-${mode}`),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const error = yield* Effect.flip(
           opened.startTurn(turnInput(providerThread, cwd, 1, "never execute twice")),
@@ -2035,17 +2443,29 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
+        const adapter = makeHermesAdapterV2({
+          instanceId,
+          settings,
+          enableTextTurns: true,
+        });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -2157,7 +2577,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
           execution_generation: 1,
         });
 
-        state.prompt = { kind: "approval", promptId: "approval-2", choices: ["deny"] };
+        state.prompt = {
+          kind: "approval",
+          promptId: "approval-2",
+          choices: ["deny"],
+        };
         yield* opened.startTurn(turnInput(providerThread, cwd, 3, "needs denial"));
         const denial = yield* next("runtime_request.updated");
         if (denial.type !== "runtime_request.updated") throw new Error("unreachable");
@@ -2180,7 +2604,11 @@ describe("HermesAdapterV2 G2 text turns", () => {
           execution_generation: 1,
         });
 
-        state.prompt = { kind: "approval", promptId: "approval-3", choices: ["deny"] };
+        state.prompt = {
+          kind: "approval",
+          promptId: "approval-3",
+          choices: ["deny"],
+        };
         yield* opened.startTurn(turnInput(providerThread, cwd, 4, "uncertain response"));
         const uncertain = yield* next("runtime_request.updated");
         if (uncertain.type !== "runtime_request.updated") throw new Error("unreachable");
@@ -2224,9 +2652,16 @@ describe("HermesAdapterV2 G2 text turns", () => {
           decision: "decline",
         });
         yield* next("turn.terminal");
-        expect(state.promptAnswers[3]).toMatchObject({ prompt_id: "approval-3", choice: "deny" });
+        expect(state.promptAnswers[3]).toMatchObject({
+          prompt_id: "approval-3",
+          choice: "deny",
+        });
 
-        state.prompt = { kind: "approval", promptId: "approval-4", choices: ["deny"] };
+        state.prompt = {
+          kind: "approval",
+          promptId: "approval-4",
+          choices: ["deny"],
+        };
         yield* opened.startTurn(turnInput(providerThread, cwd, 5, "settlement failure"));
         let settlement:
           | Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "runtime_request.updated" }>
@@ -2281,7 +2716,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
         });
         expect(
           state.calls.filter((call) => call.method === "prompt.receipt").at(-1)?.params,
-        ).toMatchObject({ session_id: "session-a", admission_id: "admission-5" });
+        ).toMatchObject({
+          session_id: "session-a",
+          admission_id: "admission-5",
+        });
         expect(state.submissions).toHaveLength(5);
         expect(
           state.calls.filter(
@@ -2340,7 +2778,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
           yield* opened.respondToRuntimeRequest(
             kind === "approval"
               ? { requestId: prompt.id, decision: "accept" }
-              : { requestId: prompt.id, answers: { "closed-by-another-viewer": "yes" } },
+              : {
+                  requestId: prompt.id,
+                  answers: { "closed-by-another-viewer": "yes" },
+                },
           );
           const closed = yield* nextRequest;
           expect(closed).toMatchObject({
@@ -2505,10 +2946,14 @@ describe("HermesAdapterV2 G2 text turns", () => {
               );
               expect(error).toMatchObject(
                 snapshot === "unknown"
-                  ? { detail: "Hermes recovery did not return a supported terminal receipt" }
+                  ? {
+                      detail: "Hermes recovery did not return a supported terminal receipt",
+                    }
                   : {
                       detail: "Invalid Hermes pending prompt resume",
-                      cause: { message: "Hermes resume admission is foreign or ambiguous" },
+                      cause: {
+                        message: "Hermes resume admission is foreign or ambiguous",
+                      },
                     },
               );
               expect(
@@ -2538,7 +2983,9 @@ describe("HermesAdapterV2 G2 text turns", () => {
                 snapshot === "omitted"
                   ? {
                       detail: "Invalid Hermes pending prompt resume",
-                      cause: { message: "Hermes resume has no canonical pending prompt state" },
+                      cause: {
+                        message: "Hermes resume has no canonical pending prompt state",
+                      },
                     }
                   : { detail: "Hermes resumed prompts are ambiguous" },
               );
@@ -2551,7 +2998,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
               return;
             }
             if (snapshot === "terminal") {
-              yield* opened.resumeTurn!({ ...run, messageId: message.messageId });
+              yield* opened.resumeTurn!({
+                ...run,
+                messageId: message.messageId,
+              });
               let terminal: ProviderAdapter.ProviderAdapterV2Event | undefined;
               while (terminal === undefined) {
                 const event = yield* Queue.take(events);
@@ -2650,17 +3100,29 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
+        const adapter = makeHermesAdapterV2({
+          instanceId,
+          settings,
+          enableTextTurns: true,
+        });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-answer-fault"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         yield* Stream.runForEach(opened.events, (event) => Queue.offer(events, event)).pipe(
@@ -2687,12 +3149,19 @@ describe("HermesAdapterV2 G2 text turns", () => {
           }
         });
 
-        state.prompt = { kind: "approval", promptId: "before-answer", choices: ["deny"] };
+        state.prompt = {
+          kind: "approval",
+          promptId: "before-answer",
+          choices: ["deny"],
+        };
         yield* opened.startTurn(turnInput(providerThread, cwd, 1, "fail before answer"));
         const beforeAnswer = yield* nextRequest("before-answer");
         state.failNextResponseSend = true;
         const sendError = yield* Effect.flip(
-          opened.respondToRuntimeRequest({ requestId: beforeAnswer.id, decision: "decline" }),
+          opened.respondToRuntimeRequest({
+            requestId: beforeAnswer.id,
+            decision: "decline",
+          }),
         );
         expect(sendError.message).toContain("Hermes response outcome is uncertain");
         expect(
@@ -2705,7 +3174,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
 
         state.sockets.at(-1)!.close();
         const reoffered = yield* nextRequest("before-answer", true);
-        yield* opened.respondToRuntimeRequest({ requestId: reoffered.id, decision: "decline" });
+        yield* opened.respondToRuntimeRequest({
+          requestId: reoffered.id,
+          decision: "decline",
+        });
         expect(yield* nextTerminal).toMatchObject({ status: "completed" });
         expect(state.promptAnswers).toHaveLength(1);
       }),
@@ -2722,24 +3194,40 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
+        const adapter = makeHermesAdapterV2({
+          instanceId,
+          settings,
+          enableTextTurns: true,
+        });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-resolution"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         yield* Stream.runForEach(opened.events, (event) => Queue.offer(events, event)).pipe(
           Effect.forkScoped,
         );
 
-        state.prompt = { kind: "approval", promptId: "approval-4", choices: ["deny"] };
+        state.prompt = {
+          kind: "approval",
+          promptId: "approval-4",
+          choices: ["deny"],
+        };
         yield* opened.startTurn(turnInput(providerThread, cwd, 1, "fail after resolution commit"));
         let request: OrchestrationV2RuntimeRequest | undefined;
         while (!request) {
@@ -2759,7 +3247,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
           },
         );
         const settlementError = yield* Effect.flip(
-          opened.respondToRuntimeRequest({ requestId: request.id, decision: "decline" }),
+          opened.respondToRuntimeRequest({
+            requestId: request.id,
+            decision: "decline",
+          }),
         );
         expect(settlementError.message).toContain("Hermes response outcome is uncertain");
         expect(state.promptAnswers).toHaveLength(1);
@@ -2778,7 +3269,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
         }
         expect(recoveredRequest?.status).toBe("resolved");
         expect(recoveredRequest).not.toHaveProperty("decision");
-        yield* opened.respondToRuntimeRequest({ requestId: request.id, decision: "decline" });
+        yield* opened.respondToRuntimeRequest({
+          requestId: request.id,
+          decision: "decline",
+        });
         expect(state.calls.filter((call) => call.method === "approval.respond")).toHaveLength(1);
       }),
     ).pipe(Effect.timeout("10 seconds")),
@@ -2794,17 +3288,29 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
+        const adapter = makeHermesAdapterV2({
+          instanceId,
+          settings,
+          enableTextTurns: true,
+        });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-turn-journal"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const reserveTextTurn = vi
           .spyOn(HermesSessionStore.prototype, "reserveTextTurn")
@@ -2833,17 +3339,29 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
+        const adapter = makeHermesAdapterV2({
+          instanceId,
+          settings,
+          enableTextTurns: true,
+        });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-journal"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -2903,12 +3421,20 @@ describe("HermesAdapterV2 G2 text turns", () => {
             threadId,
             providerSessionId: ProviderSessionId.make(`provider-session-g3-${mode}`),
             modelSelection,
-            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+            runtimePolicy: {
+              cwd,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
           });
           const providerThread = yield* opened.ensureThread({
             threadId,
             modelSelection,
-            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+            runtimePolicy: {
+              cwd,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
           });
           const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
           const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -2963,12 +3489,20 @@ describe("HermesAdapterV2 G2 text turns", () => {
             threadId,
             providerSessionId: ProviderSessionId.make("provider-session-g4-ordinary-recovery"),
             modelSelection,
-            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+            runtimePolicy: {
+              cwd,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
           });
           const providerThread = yield* opened.ensureThread({
             threadId,
             modelSelection,
-            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+            runtimePolicy: {
+              cwd,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
           });
           const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
           const observed: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
@@ -3017,12 +3551,17 @@ describe("HermesAdapterV2 G2 text turns", () => {
                 turnInput(providerThread, cwd, 2, "new work after ordinary recovery"),
               ),
             );
-            expect(error).toMatchObject({ _tag: "ProviderAdapterProtocolError" });
+            expect(error).toMatchObject({
+              _tag: "ProviderAdapterProtocolError",
+            });
             expect(state.submissions).toHaveLength(1);
             state.receiptOverride = null;
           }
           state.resumePending = [];
-          state.prompt = { kind: "clarify", promptId: "after-ordinary-recovery" };
+          state.prompt = {
+            kind: "clarify",
+            promptId: "after-ordinary-recovery",
+          };
           yield* opened.startTurn(
             turnInput(providerThread, cwd, 2, "new work after ordinary recovery"),
           );
@@ -3055,7 +3594,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
             NodePath.join(directory, "state", "sessions.sqlite3"),
           );
           const original = store.getTextTurnReceipt(String(state.submissions[0]!.input_id));
-          expect(original).toMatchObject({ status: "terminal", outcome: "interrupted" });
+          expect(original).toMatchObject({
+            status: "terminal",
+            outcome: "interrupted",
+          });
           expect(store.get(threadId)).toMatchObject({
             instanceId: "instance-b",
             authorityEpoch: 5,
@@ -3066,21 +3608,56 @@ describe("HermesAdapterV2 G2 text turns", () => {
   );
 
   it.live.each([
-    { status: "unknown", cleanup: "prompt.resolve_unknown", unlock: true, dropResponse: true },
+    {
+      status: "unknown",
+      cleanup: "prompt.resolve_unknown",
+      unlock: true,
+      dropResponse: true,
+    },
     {
       status: "unknown",
       cleanup: "prompt.resolve_unknown",
       unlock: true,
       restartingSocket: "refused",
     },
-    { status: "unknown", cleanup: "prompt.resolve_unknown", unlock: true, restartingSocket: 503 },
+    {
+      status: "unknown",
+      cleanup: "prompt.resolve_unknown",
+      unlock: true,
+      restartingSocket: 503,
+    },
     { status: "unknown", cleanup: null, unlock: false, restartingSocket: 401 },
-    { status: "unknown", cleanup: "prompt.resolve_unknown", unlock: true, queueBeforeStart: true },
-    { status: "started", cleanup: "session.interrupt", unlock: true, dropResponse: true },
+    {
+      status: "unknown",
+      cleanup: "prompt.resolve_unknown",
+      unlock: true,
+      queueBeforeStart: true,
+    },
+    {
+      status: "started",
+      cleanup: "session.interrupt",
+      unlock: true,
+      dropResponse: true,
+    },
     { status: "started", cleanup: "session.interrupt", unlock: true },
-    { status: "started", cleanup: "session.interrupt", unlock: false, wrongAck: true },
-    { status: "started", cleanup: "session.interrupt", unlock: true, delaySettlement: 1 },
-    { status: "started", cleanup: "session.interrupt", unlock: false, delaySettlement: 2 },
+    {
+      status: "started",
+      cleanup: "session.interrupt",
+      unlock: false,
+      wrongAck: true,
+    },
+    {
+      status: "started",
+      cleanup: "session.interrupt",
+      unlock: true,
+      delaySettlement: 1,
+    },
+    {
+      status: "started",
+      cleanup: "session.interrupt",
+      unlock: false,
+      delaySettlement: 2,
+    },
     { status: "terminal", cleanup: null, unlock: true },
     { status: "queued", cleanup: null, unlock: false },
     { status: "unknown", cleanup: null, unlock: false, wrongIdentity: true },
@@ -3109,12 +3686,20 @@ describe("HermesAdapterV2 G2 text turns", () => {
               `provider-session-restart-${status}-${unlock}`,
             ),
             modelSelection,
-            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+            runtimePolicy: {
+              cwd,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
           });
           const providerThread = yield* opened.ensureThread({
             threadId,
             modelSelection,
-            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+            runtimePolicy: {
+              cwd,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
           });
           const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
           yield* Stream.runForEach(opened.events, (event) => Queue.offer(events, event)).pipe(
@@ -3185,7 +3770,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
           }
 
           const stale = yield* Effect.flip(
-            opened.respondToRuntimeRequest({ requestId: pendingRequest.id, decision: "accept" }),
+            opened.respondToRuntimeRequest({
+              requestId: pendingRequest.id,
+              decision: "accept",
+            }),
           );
           expect(stale._tag).toBe("ProviderAdapterProtocolError");
           expect(state.calls.filter((call) => call.method === "approval.respond")).toHaveLength(0);
@@ -3199,7 +3787,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
             state.setCurrentAuthority();
             state.restartStatus = null;
             state.queueBeforeStart = false;
-            state.prompt = { kind: "clarify", promptId: `after-restart-${status}` };
+            state.prompt = {
+              kind: "clarify",
+              promptId: `after-restart-${status}`,
+            };
             yield* opened.startTurn(turnInput(providerThread, cwd, 2, "later work"));
             let laterRequest: OrchestrationV2RuntimeRequest | undefined;
             while (!laterRequest) {
@@ -3245,7 +3836,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
             contentBase64: "AAECAw==",
           },
         );
-        expect(staged).toMatchObject({ uploadClaimed: false, contentBase64: "AAECAw==" });
+        expect(staged).toMatchObject({
+          uploadClaimed: false,
+          contentBase64: "AAECAw==",
+        });
         expect(terminal.status).toBe("completed");
         expect(state.calls.filter((call) => call.method === "image.attach_bytes")).toHaveLength(1);
         expect(state.calls.find((call) => call.method === "image.attach_bytes")).toMatchObject({
@@ -3260,7 +3854,12 @@ describe("HermesAdapterV2 G2 text turns", () => {
             session_id: "session-a",
             input_id: original!.input_id,
             text: "exact journal-only input",
-            attachments: [{ path: "/profile/cache/images/upload-1.png", mime: "image/png" }],
+            attachments: [
+              {
+                path: "/profile/cache/images/upload-1.png",
+                mime: "image/png",
+              },
+            ],
           },
         ]);
         const store = new HermesSessionStore(NodePath.join(directory, "state", "sessions.sqlite3"));
@@ -3304,7 +3903,12 @@ describe("HermesAdapterV2 G2 text turns", () => {
             session_id: "session-a",
             input_id: original!.input_id,
             text: "exact journal-only input",
-            attachments: [{ path: "/profile/cache/images/upload-1.png", mime: "image/png" }],
+            attachments: [
+              {
+                path: "/profile/cache/images/upload-1.png",
+                mime: "image/png",
+              },
+            ],
           },
         ]);
       }),
@@ -3359,10 +3963,30 @@ describe("HermesAdapterV2 G2 text turns", () => {
       imageBytes: 4,
       imageMime: "image/png",
     },
-    { mode: "declared size mismatch", sizeBytes: 5, imageBytes: 4, imageMime: "image/png" },
-    { mode: "missing returned bytes", sizeBytes: 4, imageBytes: null, imageMime: "image/png" },
-    { mode: "returned size mismatch", sizeBytes: 4, imageBytes: 5, imageMime: "image/png" },
-    { mode: "returned MIME mismatch", sizeBytes: 4, imageBytes: 4, imageMime: "image/jpeg" },
+    {
+      mode: "declared size mismatch",
+      sizeBytes: 5,
+      imageBytes: 4,
+      imageMime: "image/png",
+    },
+    {
+      mode: "missing returned bytes",
+      sizeBytes: 4,
+      imageBytes: null,
+      imageMime: "image/png",
+    },
+    {
+      mode: "returned size mismatch",
+      sizeBytes: 4,
+      imageBytes: 5,
+      imageMime: "image/png",
+    },
+    {
+      mode: "returned MIME mismatch",
+      sizeBytes: 4,
+      imageBytes: 4,
+      imageMime: "image/jpeg",
+    },
   ])(
     "G3 rejects $mode without submitting the prompt",
     ({ mode, sizeBytes, imageBytes, imageMime }) =>
@@ -3389,12 +4013,20 @@ describe("HermesAdapterV2 G2 text turns", () => {
             threadId,
             providerSessionId: ProviderSessionId.make(`provider-session-g3-${mode}`),
             modelSelection,
-            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+            runtimePolicy: {
+              cwd,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
           });
           const providerThread = yield* opened.ensureThread({
             threadId,
             modelSelection,
-            runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+            runtimePolicy: {
+              cwd,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+            },
           });
           const input = turnInput(providerThread, cwd, 1, "inspect this image");
           const error = yield* Effect.flip(
@@ -3443,12 +4075,20 @@ describe("HermesAdapterV2 G2 text turns", () => {
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-image"),
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const providerThread = yield* opened.ensureThread({
           threadId,
           modelSelection,
-          runtimePolicy: { cwd, runtimeMode: "full-access", interactionMode: "default" },
+          runtimePolicy: {
+            cwd,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         yield* Stream.runForEach(opened.events, (event) => Queue.offer(events, event)).pipe(
@@ -3523,7 +4163,10 @@ describe("HermesAdapterV2 G2 text turns", () => {
     Effect.gen(function* () {
       for (const selection of [
         { ...modelSelection, model: "switched" },
-        { ...modelSelection, options: [{ id: "reasoningEffort", value: "high" }] },
+        {
+          ...modelSelection,
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
       ]) {
         const { state, result, transition } = yield* runSelectionTurn(selection);
         expect(transition).toMatchObject({

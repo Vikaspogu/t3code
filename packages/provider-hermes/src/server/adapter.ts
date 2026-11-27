@@ -1792,19 +1792,29 @@ export const makeHermesAdapterV2 = (input: {
           if (runtime.profile_id !== profileId) {
             return yield* protocolError("Hermes profile does not match provider configuration");
           }
+          const identity = {
+            threadId,
+            profileId: runtime.profile_id,
+            instanceId: runtime.instance_id,
+            principalId,
+            authorityEpoch: runtime.authority_epoch,
+          };
           const reservation = yield* Effect.try({
             try: () =>
-              store.reserve({
-                threadId,
-                profileId: runtime.profile_id,
-                instanceId: runtime.instance_id,
-                principalId,
-                authorityEpoch: runtime.authority_epoch,
-              }),
+              ensureInput.forceNewNativeThread
+                ? store.reserveFresh(identity)
+                : store.reserve(identity),
             catch: (cause) =>
-              protocolError("Hermes session identity does not match durable state", cause),
+              protocolError(
+                ensureInput.forceNewNativeThread
+                  ? "Could not reserve a replacement Hermes session"
+                  : "Hermes session identity does not match durable state",
+                cause,
+              ),
           });
-          const adoptedSessionId = ensureInput.existingProviderThread?.nativeThreadRef?.nativeId;
+          const adoptedSessionId = ensureInput.forceNewNativeThread
+            ? null
+            : ensureInput.existingProviderThread?.nativeThreadRef?.nativeId;
           if (
             adoptedSessionId &&
             reservation.sessionId &&
@@ -1829,7 +1839,9 @@ export const makeHermesAdapterV2 = (input: {
               catch: (cause) => protocolError("Could not persist adopted Hermes session", cause),
             });
           }
-          let sessionId = reservation.sessionId ?? adoptedSessionId ?? null;
+          let sessionId = ensureInput.forceNewNativeThread
+            ? null
+            : (reservation.sessionId ?? adoptedSessionId);
           if (!sessionId) {
             const created = yield* request("session.create", {
               request_id: reservation.requestId,
@@ -1842,7 +1854,15 @@ export const makeHermesAdapterV2 = (input: {
               catch: (cause) => protocolError("Invalid Hermes session.create response", cause),
             });
             yield* Effect.try({
-              try: () => store.bind(threadId, reservation.requestId, createdSessionId),
+              try: () =>
+                ensureInput.forceNewNativeThread
+                  ? store.bindFresh(
+                      threadId,
+                      reservation.requestId,
+                      reservation.sessionId,
+                      createdSessionId,
+                    )
+                  : store.bind(threadId, reservation.requestId, createdSessionId),
               catch: (cause) => protocolError("Could not persist Hermes session mapping", cause),
             });
             sessionId = createdSessionId;
