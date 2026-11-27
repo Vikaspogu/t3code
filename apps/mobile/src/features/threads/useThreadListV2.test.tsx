@@ -33,6 +33,8 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
       makeRawThreadShell({
         id: ThreadId.make(`thread-${index}`),
         title: `Thread ${index}`,
+        pinnedAt: index === 0 ? DateTime.makeUnsafe("2026-01-01T00:00:00.000Z") : null,
+        pinOrderKey: index === 0 ? "a" : null,
         settledOverride: index < 150 ? "active" : "settled",
         settledAt: index < 150 ? null : DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
       }),
@@ -57,6 +59,7 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
     shelfPreferencesLoaded: true,
     workingShelfEnabled: true,
     pinnedShelfExpanded: true,
+    pinnedStatusEnabled: true,
     idleShelfExpanded: true,
     workingShelfExpanded: false,
     snoozedShelfExpanded: false,
@@ -243,4 +246,21 @@ it("reuses a large thread list across tab renders and updates when its inputs ch
   expect(loaded.layout.items).toHaveLength(160);
   expect(loaded.olderSettledShelf.isListed(threads[150]!)).toBe(true);
   expect(loaded.items).not.toBe(loading.items);
+  await act(async () =>
+    root.render(<Probe input={{ ...input, pinnedShelfExpanded: false }} tab="chats" />),
+  );
+  const collapsedPinned = seen.at(-1)!;
+  expect(collapsedPinned.layout.pinnedSummary).toEqual({
+    attention: 0,
+    failed: 0,
+    done: 0,
+    working: 0,
+  });
+  expect(collapsedPinned.layout.pinnedHiddenCount).toBe(1);
+  expect(collapsedPinned.layout.items.some((item) => item.thread.id === "thread-0")).toBe(false);
+  expect(collapsedPinned.items[0]).toMatchObject({
+    type: "v2-pinned-shelf",
+    summary: { attention: 0, failed: 0, done: 0, working: 0 },
+    hiddenCount: 1,
+  });
 });

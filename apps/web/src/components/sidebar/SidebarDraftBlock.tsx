@@ -70,6 +70,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   navigationParent?: string | undefined;
   composer: ComposerThreadDraftState | null;
   terminalLabel: string | null;
+  showEmptyDraftFallback?: boolean | undefined;
   project: ProjectFaviconProject | null;
   projectDisplayName: string | null;
   isActive: boolean;
@@ -101,8 +102,17 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
     composer.terminalContexts.length +
     composer.previewAnnotations.length +
     composer.reviewComments.length;
-  const preview =
-    promptPreview.length > 0
+  const showEmptyDraftFallback =
+    props.showEmptyDraftFallback === true &&
+    promptPreview.length === 0 &&
+    attachmentCount === 0 &&
+    props.terminalLabel === null &&
+    (!("threadContexts" in composer) || composer.threadContexts.length === 0) &&
+    (!("environmentContexts" in composer) || composer.environmentContexts.length === 0) &&
+    (!("replyTo" in composer) || (composer.replyTo ?? null) === null);
+  const preview = showEmptyDraftFallback
+    ? gt("Unsent draft")
+    : promptPreview.length > 0
       ? promptPreview
       : attachmentCount === 0 && props.terminalLabel !== null
         ? props.terminalLabel
@@ -111,7 +121,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
           });
   const accessibility = resolveSidebarRowAccessibility({
     title: preview,
-    statusLabel: gt("Unsent draft"),
+    statusLabel: showEmptyDraftFallback ? null : gt("Unsent draft"),
     projectDisplayName: props.projectDisplayName,
     isActive: props.isActive,
   });
@@ -217,6 +227,7 @@ export function useSidebarDrafts(
   scopedProjectKeys: ReadonlySet<string> | null,
   routeDraftId: string | null,
   terminalLabels: ReadonlyMap<string, string>,
+  includeEmptyRoute = false,
 ): { draftIds: readonly DraftId[]; routeDraftComposer: ComposerThreadDraftState | null } {
   const [frozenRoute, setFrozenRoute] = useState<{
     routeDraftId: string | null;
@@ -242,7 +253,7 @@ export function useSidebarDrafts(
         const isListed =
           draftTerminalLabel(session, terminalLabels) !== null ||
           (draftKey === routeDraftId
-            ? routeDraftComposer !== null
+            ? includeEmptyRoute || routeDraftComposer !== null
             : composerDraftHasUserContent(store.draftsByThreadKey[draftKey]));
         if (isListed) listed.push([draftKey, session]);
       }
@@ -263,6 +274,7 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   routeDraftId: string | null;
+  showEmptyDraftFallback?: boolean | undefined;
   onNavigateToDraft: (draftId: DraftId) => void;
   onDraftContextMenu: (
     draftId: DraftId,
@@ -300,6 +312,9 @@ export const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
             navigationParent={props.navigationParent}
             composer={composer}
             terminalLabel={draftTerminalLabel(session, props.terminalLabels)}
+            showEmptyDraftFallback={
+              props.showEmptyDraftFallback === true && draftId === props.routeDraftId
+            }
             project={
               props.showProject === false ? null : (props.projectByKey.get(projectKey) ?? null)
             }

@@ -191,6 +191,7 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status(failed)).toBe("failed");
     expect(resolveThreadListV2RowStatus(failed)).toBe("ready");
     expect(resolveThreadListV2RowStatus({ ...failed, lastVisitedAt: null })).toBe("failed");
+    expect(resolveThreadListV2RowStatus(failed, { preserveFailedStatus: true })).toBe("failed");
   });
 
   it("shows a waiting guest message as Request, after the agent's own requests", () => {
@@ -740,44 +741,43 @@ describe("collapsed shelf dots", () => {
     assistantMessageId: null,
   });
 
+  const done = makeThread({
+    id: ThreadId.make("done"),
+    title: "Done",
+    lastVisitedAt: "2026-06-01T00:00:00.000Z",
+    latestRun: run("2026-06-02T00:00:00.000Z"),
+  });
+  const failed = makeThread({
+    id: ThreadId.make("failed"),
+    title: "Failed",
+    runtime: {
+      status: "failed",
+      activeRunId: null,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerName: "Codex",
+      lastError: "Run failed",
+      updatedAt: NOW,
+    },
+  });
+  const needsYou = makeThread({
+    id: ThreadId.make("needs-you"),
+    title: "Needs you",
+    hasPendingApprovals: true,
+  });
+  const working = makeThread({
+    id: ThreadId.make("working"),
+    title: "Working",
+    runtime: {
+      status: "running",
+      activeRunId: RunId.make("run-active"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerName: "Codex",
+      lastError: null,
+      updatedAt: NOW,
+    },
+  });
+  const quiet = makeThread({ id: ThreadId.make("quiet"), title: "Quiet" });
   it("resolveThreadListV2ShelfDot prefers the most urgent state", () => {
-    const done = makeThread({
-      id: ThreadId.make("done"),
-      title: "Done",
-      lastVisitedAt: "2026-06-01T00:00:00.000Z",
-      latestRun: run("2026-06-02T00:00:00.000Z"),
-    });
-    const failed = makeThread({
-      id: ThreadId.make("failed"),
-      title: "Failed",
-      runtime: {
-        status: "failed",
-        activeRunId: null,
-        providerInstanceId: ProviderInstanceId.make("codex"),
-        providerName: "Codex",
-        lastError: "Run failed",
-        updatedAt: NOW,
-      },
-    });
-    const needsYou = makeThread({
-      id: ThreadId.make("needs-you"),
-      title: "Needs you",
-      hasPendingApprovals: true,
-    });
-    const working = makeThread({
-      id: ThreadId.make("working"),
-      title: "Working",
-      runtime: {
-        status: "running",
-        activeRunId: RunId.make("run-active"),
-        providerInstanceId: ProviderInstanceId.make("codex"),
-        providerName: "Codex",
-        lastError: null,
-        updatedAt: NOW,
-      },
-    });
-    const quiet = makeThread({ id: ThreadId.make("quiet"), title: "Quiet" });
-
     expect(resolveThreadListV2ShelfDot([quiet])).toBeNull();
     expect(resolveThreadListV2ShelfDot([done])).toBe("unread");
     expect(resolveThreadListV2ShelfDot([done, working])).toBe("unread");
@@ -844,6 +844,160 @@ describe("collapsed shelf dots", () => {
         settledShelfDot: collapsedLayout.settledShelfDot,
       }),
     ).toContainEqual(expect.objectContaining({ type: "v2-pinned-shelf", dot: "unread" }));
+  });
+
+  it("keeps one urgent preview and counts every pinned status", () => {
+    const pinned = (thread: EnvironmentThreadShell, pinOrderKey: string) => ({
+      ...thread,
+      pinnedAt: NOW,
+      pinOrderKey,
+    });
+    const layout = buildThreadListV2Items({
+      threads: [
+        pinned(quiet, "a"),
+        pinned(working, "b"),
+        pinned(done, "c"),
+        pinned(needsYou, "d"),
+        pinned(failed, "e"),
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      pinnedStatusEnabled: true,
+      selectedThreadKey: `${environmentId}:quiet`,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["needs-you", "quiet", "active"]);
+    expect(layout.pinnedSummary).toEqual({ attention: 1, failed: 1, done: 1, working: 1 });
+    expect(layout.pinnedHiddenCount).toBe(3);
+    expect(layout.pinnedShelfDot).toBe("attention");
+
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      pinnedCount: layout.pinnedCount,
+      pinnedShelfExpanded: false,
+      pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
+      pinnedSummary: layout.pinnedSummary,
+      pinnedHiddenCount: layout.pinnedHiddenCount,
+      idleCount: layout.idleCount,
+      idleShelfExpanded: true,
+    });
+    expect(items[0]).toMatchObject({
+      type: "v2-pinned-shelf",
+      summary: { attention: 1, failed: 1, done: 1, working: 1 },
+      hiddenCount: 3,
+    });
+    expect(threadJumpTarget(items, "thread.jump.1")).toMatchObject({
+      item: { thread: { id: "needs-you" } },
+    });
+    expect(threadJumpTarget(items, "thread.jump.2")).toMatchObject({
+      item: { thread: { id: "quiet" } },
+    });
+    expect(threadJumpTarget(items, "thread.jump.3")).toMatchObject({
+      item: { thread: { id: "active" } },
+    });
+    expect(threadJumpTarget(items, "thread.jump.4")).toBeNull();
+    expect(items.map((item) => item.type)).toEqual([
+      "v2-pinned-shelf",
+      "v2-thread",
+      "v2-thread",
+      "v2-idle-shelf",
+      "v2-thread",
+    ]);
+  });
+  it("uses the first failed pin as the preview without duplicating a selected route", () => {
+    const failedPin = { ...failed, pinnedAt: NOW, pinOrderKey: "a" };
+    const quietPin = { ...quiet, pinnedAt: NOW, pinOrderKey: "b" };
+    const input = {
+      threads: [quietPin, failedPin],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      pinnedStatusEnabled: true,
+    };
+    const layout = buildThreadListV2Items(input);
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["failed"]);
+    expect(layout.items[0]?.preserveFailedStatus).toBe(true);
+    expect(layout.pinnedSummary).toEqual({ attention: 0, failed: 1, done: 0, working: 0 });
+    expect(layout.pinnedHiddenCount).toBe(1);
+
+    const selected = buildThreadListV2Items({
+      ...input,
+      selectedThreadKey: `${environmentId}:failed`,
+    });
+    expect(selected.items.map((item) => item.thread.id)).toEqual(["failed"]);
+    expect(selected.items[0]?.preserveFailedStatus).toBe(true);
+
+    const selectedItems = buildThreadListV2ListItems({
+      items: selected.items,
+      pendingTasks: [],
+      pinnedCount: selected.pinnedCount,
+      pinnedShelfExpanded: false,
+      pinnedShelfHeaderIndex: selected.pinnedShelfHeaderIndex,
+      pinnedSummary: selected.pinnedSummary,
+      pinnedHiddenCount: selected.pinnedHiddenCount,
+    });
+    expect(selectedItems.map((item) => item.type)).toEqual(["v2-pinned-shelf", "v2-thread"]);
+    expect(threadJumpTarget(selectedItems, "thread.jump.1")).toMatchObject({
+      item: { thread: { id: "failed" } },
+    });
+    expect(threadJumpTarget(selectedItems, "thread.jump.2")).toBeNull();
+    const legacy = buildThreadListV2Items({
+      ...input,
+      pinnedStatusEnabled: false,
+      selectedThreadKey: `${environmentId}:quiet`,
+    });
+    expect(legacy.items.map((item) => item.thread.id)).toEqual(["quiet"]);
+    expect(legacy.items[0]?.preserveFailedStatus).toBeUndefined();
+    expect(legacy.pinnedSummary).toBeNull();
+    expect(legacy.pinnedHiddenCount).toBe(0);
+    expect(legacy.pinnedShelfDot).toBe("failed");
+  });
+
+  it("counts preparing pins as working while they remain hidden", () => {
+    const preparing = {
+      ...working,
+      pinnedAt: NOW,
+      runtime: { ...working.runtime!, status: "preparing" as const },
+    };
+    const layout = buildThreadListV2Items({
+      threads: [preparing, quiet, makeThread({ id: ThreadId.make("active"), title: "Active" })],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      pinnedShelfExpanded: false,
+      idleShelfExpanded: false,
+      selectedThreadKey: `${environmentId}:active`,
+      pinnedStatusEnabled: true,
+    });
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["active"]);
+    expect(layout.pinnedSummary).toEqual({ attention: 0, failed: 0, done: 0, working: 1 });
+    expect(layout.pinnedHiddenCount).toBe(1);
+    expect(layout.pinnedShelfDot).toBe("working");
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      pinnedCount: layout.pinnedCount,
+      pinnedShelfExpanded: false,
+      pinnedShelfHeaderIndex: layout.pinnedShelfHeaderIndex,
+      pinnedSummary: layout.pinnedSummary,
+      pinnedHiddenCount: layout.pinnedHiddenCount,
+      idleCount: layout.idleCount,
+      idleShelfExpanded: false,
+    });
+    expect(items).toMatchObject([
+      { type: "v2-pinned-shelf" },
+      { type: "v2-idle-shelf" },
+      { type: "v2-thread", item: { thread: { id: "active" } } },
+    ]);
+    expect(threadJumpTarget(items, "thread.jump.1")).toMatchObject({
+      item: { thread: { id: "active" } },
+    });
+    expect(threadJumpTarget(items, "thread.jump.2")).toBeNull();
   });
 });
 describe("buildThreadListV2Items settled paging", () => {
@@ -1708,8 +1862,51 @@ describe("threadListV2ListItemsAreEqual", () => {
     { type: "v2-snoozed-shelf", key: "v2-snoozed-shelf" },
     { type: "v2-settled-shelf", key: "v2-settled-shelf" },
   ] as const)("notices a changed status dot on $type", (header) => {
-    const previous = { ...header, count: 3, expanded: false, disabled: false, dot: null };
+    const previous = {
+      ...header,
+      count: 3,
+      expanded: false,
+      disabled: false,
+      dot: null,
+      ...(header.type === "v2-pinned-shelf" ? { summary: null, hiddenCount: 0 } : {}),
+    };
     expect(threadListV2ListItemsAreEqual(previous, { ...previous, dot: "attention" })).toBe(false);
+  });
+
+  it.each(["attention", "failed", "done", "working"] as const)(
+    "notices a changed pinned %s count and hidden count",
+    (category) => {
+      const summary = { attention: 0, failed: 0, done: 0, working: 0 };
+      const previous = {
+        type: "v2-pinned-shelf",
+        key: "v2-pinned-shelf",
+        count: 3,
+        expanded: false,
+        disabled: false,
+        dot: null,
+        summary,
+        hiddenCount: 2,
+      } as const;
+      expect(
+        threadListV2ListItemsAreEqual(previous, {
+          ...previous,
+          summary: { ...summary, [category]: 1 },
+        }),
+      ).toBe(false);
+      expect(threadListV2ListItemsAreEqual(previous, { ...previous, hiddenCount: 1 })).toBe(false);
+    },
+  );
+
+  it("notices a changed preserve-failure marker", () => {
+    const previous = build().find((item) => item.type === "v2-thread" && item.item.pinned);
+    expect(previous?.type).toBe("v2-thread");
+    if (previous?.type !== "v2-thread") throw new Error("missing pinned row");
+    expect(
+      threadListV2ListItemsAreEqual(previous, {
+        ...previous,
+        item: { ...previous.item, preserveFailedStatus: true },
+      }),
+    ).toBe(false);
   });
 
   it("treats rebuilt wrappers over identical rows as equal", () => {

@@ -41,6 +41,7 @@ import {
   resolvePinnedSidebarSummary,
   selectPinnedSidebarPreview,
   resolvePinnedSidebarVisibleThreads,
+  resolvePinnedSidebarHiddenCount,
   routeThreadOnly,
   sidebarFolderExpansionKeys,
   withoutRemovedCheckout,
@@ -1786,6 +1787,19 @@ describe("Sidebar status helpers", () => {
         working: 1,
       });
     });
+    it("keeps visited failures failed and counts done and working pins", () => {
+      const visitedFailure = {
+        ...failed,
+        lastVisitedAt: "2026-03-09T10:06:00.000Z",
+        latestRun: { ...makeLatestRun(), status: "failed" as const },
+      };
+      expect(resolvePinnedSidebarSummary([visitedFailure, working, unread])).toEqual({
+        attention: 0,
+        failed: 1,
+        done: 1,
+        working: 1,
+      });
+    });
   });
 
   describe("selectPinnedSidebarPreview", () => {
@@ -1831,7 +1845,7 @@ describe("Sidebar status helpers", () => {
       ).toEqual([rows[1]]);
     });
 
-    it("passes local visits through to preview selection", () => {
+    it("keeps a visited failure eligible for the urgent preview", () => {
       const visitedFailure = {
         ...failed,
         id: "failed",
@@ -1845,9 +1859,48 @@ describe("Sidebar status helpers", () => {
           statusEnabled: true,
           routeRowThreadKey: null,
           threadKey: (thread) => thread.id,
-          getLocalLastVisitedAt: () => "2026-03-09T10:06:00.000Z",
         }),
-      ).toEqual([]);
+      ).toEqual([visitedFailure]);
+    });
+
+    it("counts unique hidden pins across urgent, done, working, route, and legacy rows", () => {
+      const allRows = [...rows, { ...unread, id: "done" }, { ...idle, id: "idle" }];
+      const visible = resolvePinnedSidebarVisibleThreads({
+        threads: allRows,
+        expanded: false,
+        statusEnabled: true,
+        routeRowThreadKey: "failed",
+        threadKey: (thread) => thread.id,
+      });
+      expect(visible.map((thread) => thread.id)).toEqual(["limited", "failed"]);
+      expect(
+        resolvePinnedSidebarHiddenCount({
+          threads: allRows,
+          visibleThreads: visible,
+          threadKey: (thread) => thread.id,
+        }),
+      ).toBe(3);
+      expect(
+        resolvePinnedSidebarHiddenCount({
+          threads: allRows,
+          visibleThreads: [allRows[0]!, allRows[0]!, allRows[1]!],
+          threadKey: (thread) => thread.id,
+        }),
+      ).toBe(3);
+      expect(
+        resolvePinnedSidebarHiddenCount({
+          threads: allRows,
+          visibleThreads: [allRows[0]!],
+          threadKey: (thread) => thread.id,
+        }),
+      ).toBe(4);
+      expect(
+        resolvePinnedSidebarHiddenCount({
+          threads: allRows,
+          visibleThreads: allRows,
+          threadKey: (thread) => thread.id,
+        }),
+      ).toBe(0);
     });
   });
 });
