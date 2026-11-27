@@ -1,6 +1,10 @@
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
+  summarizeStatuses,
+  type PinnedSummaryStatus,
+} from "@t3tools/client-runtime/state/pinned-summary";
+import {
   resolveThreadWorkingStartedAt,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
@@ -1075,39 +1079,29 @@ export function routeThreadOnly<T extends Pick<EnvironmentThreadShell, "environm
 export function resolvePinnedSidebarSummary(
   threads: ReadonlyArray<ThreadStatusInput & SidebarThreadStatusInput>,
 ) {
-  const summary = { attention: 0, failed: 0, done: 0, working: 0 };
-  for (const thread of threads) {
-    const status = resolveSidebarRowStatus(thread);
-    if (
-      status === "input" ||
-      status === "approval" ||
-      status === "request" ||
-      status === "limited"
-    ) {
-      summary.attention += 1;
-    } else if (status === "failed") {
-      summary.failed += 1;
-    } else if (status === "ready" && hasUnseenCompletion(thread)) {
-      summary.done += 1;
-    } else if (status === "working" || status === "preparing") {
-      summary.working += 1;
-    }
-  }
-  return summary;
+  return summarizeStatuses(
+    threads.map((thread): PinnedSummaryStatus => {
+      const status = resolveSidebarThreadStatus(thread);
+      if (
+        status === "input" ||
+        status === "approval" ||
+        status === "request" ||
+        status === "limited"
+      ) {
+        return "attention";
+      }
+      if (status === "failed") return "failed";
+      if (status === "ready" && hasUnseenCompletion(thread)) return "done";
+      if (status === "working" || status === "preparing") return "working";
+      return "idle";
+    }),
+  );
 }
 
 export function selectPinnedSidebarPreview<T extends ThreadStatusInput & SidebarThreadStatusInput>(
   threads: readonly T[],
-  getLocalLastVisitedAt?: (thread: T) => string | undefined,
 ): T | null {
-  const status = (thread: T) =>
-    resolveSidebarRowStatus({
-      ...thread,
-      lastVisitedAt: resolveThreadLastVisitedAt(
-        thread.lastVisitedAt,
-        getLocalLastVisitedAt?.(thread),
-      ),
-    });
+  const status = (thread: T) => resolveSidebarThreadStatus(thread);
   return (
     threads.find((thread) => {
       const value = status(thread);
@@ -1128,7 +1122,6 @@ export function resolvePinnedSidebarVisibleThreads<
   readonly statusEnabled: boolean;
   readonly routeRowThreadKey: string | null;
   readonly threadKey: (thread: T) => string;
-  readonly getLocalLastVisitedAt?: (thread: T) => string | undefined;
 }): readonly T[] {
   if (input.expanded) return input.threads;
   const routeThread =
@@ -1137,12 +1130,20 @@ export function resolvePinnedSidebarVisibleThreads<
       : input.threads.find((thread) => input.threadKey(thread) === input.routeRowThreadKey);
   const routeThreads = routeThread === undefined ? [] : [routeThread];
   if (!input.statusEnabled) return routeThreads;
-  const preview = selectPinnedSidebarPreview(input.threads, input.getLocalLastVisitedAt);
+  const preview = selectPinnedSidebarPreview(input.threads);
   return preview === null
     ? routeThreads
     : [preview, ...routeThreads.filter((thread) => thread !== preview)];
 }
 
+export function resolvePinnedSidebarHiddenCount<T>(input: {
+  readonly threads: readonly T[];
+  readonly visibleThreads: readonly T[];
+  readonly threadKey: (thread: T) => string;
+}): number {
+  const visibleKeys = new Set(input.visibleThreads.map(input.threadKey));
+  return Math.max(0, input.threads.length - visibleKeys.size);
+}
 /**
  * Keys the old per-project sidebar saved folder open state under, most
  * specific first, for `resolveProjectExpanded`. Boring folders read and write

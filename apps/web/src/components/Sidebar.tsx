@@ -226,6 +226,9 @@ import {
   type SidebarListItem,
   type SidebarSection,
   resolvePinnedSidebarVisibleThreads,
+  resolvePinnedSidebarHiddenCount,
+  resolveSidebarThreadStatus,
+  selectPinnedSidebarPreview,
   routeThreadOnly,
 } from "./Sidebar.logic";
 import {
@@ -555,9 +558,6 @@ function useSidebarThreads(input: {
     true,
     Schema.Boolean,
   );
-  const localLastVisitedAtById = useUiStateStore((state) =>
-    pinnedStatusEnabled && !pinnedShelfExpanded ? state.threadLastVisitedAtById : null,
-  );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
@@ -592,27 +592,23 @@ function useSidebarThreads(input: {
   const liveEnvironmentIds = new Set(
     statusEnvironmentIds.filter((_, index) => shellStatuses[index] === "live"),
   );
-  const conversationCounts = { "needs-you": 0, running: 0, unknown: 0 };
-  const matchingThreadKeys = new Set<string>();
-  let selectedOutsideLens = false;
+  const conversationCounts = {
+    all: partition.visibleThreads.length,
+    "needs-you": 0,
+    running: 0,
+    unknown: 0,
+  };
+  const lensMatches: EnvironmentThreadShell[] = [];
+  let selectedOutsideLens: EnvironmentThreadShell | undefined;
   if (pinnedStatusEnabled) {
     for (const thread of partition.visibleThreads) {
       const activity = conversationActivity(thread, liveEnvironmentIds.has(thread.environmentId));
       if (activity !== "idle") conversationCounts[activity]++;
-      if (lens !== "all") {
-        const key = threadShellKey(thread);
-        if (activity === lens) matchingThreadKeys.add(key);
-        else if (key === routeRowThreadKey) selectedOutsideLens = true;
-      }
+      if (lens === "all") continue;
+      if (activity === lens) lensMatches.push(thread);
+      else if (threadShellKey(thread) === routeRowThreadKey) selectedOutsideLens = thread;
     }
   }
-  const filterForLens = (list: readonly EnvironmentThreadShell[]) =>
-    lens === "all"
-      ? list
-      : list.filter((thread) => {
-          const key = threadShellKey(thread);
-          return matchingThreadKeys.has(key) || key === routeRowThreadKey;
-        });
   // With no pinned threads there is nothing to hide and no header to re-expand,
   // so a stale collapsed flag must not block dragging a thread into the empty boundary.
   const pinnedShelfDropAllowed = pinnedShelfExpanded || pinnedThreads.length === 0;
@@ -640,13 +636,13 @@ function useSidebarThreads(input: {
     return visible.length === settledThreads.length ? settledThreads : visible;
   })();
   const renderedSettledThreads = settledShelfExpanded
-    ? filterForLens(visibleSettledThreads)
+    ? visibleSettledThreads
     : routeThreadOnly(visibleSettledThreads, shelfRouteThreadKey);
   const visibleSnoozedThreads = snoozedShelfExpanded
-    ? filterForLens(snoozedThreads)
+    ? snoozedThreads
     : routeThreadOnly(snoozedThreads, shelfRouteThreadKey);
   const visibleWorkingThreads = workingShelfExpanded
-    ? filterForLens(workingThreads)
+    ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
   const visiblePinnedThreads = resolvePinnedSidebarVisibleThreads({
     threads: pinnedThreads,
@@ -654,10 +650,16 @@ function useSidebarThreads(input: {
     statusEnabled: pinnedStatusEnabled,
     routeRowThreadKey,
     threadKey: threadShellKey,
-    getLocalLastVisitedAt: (thread) => localLastVisitedAtById?.[threadShellKey(thread)],
+  });
+  const pinnedPreviewThread =
+    pinnedStatusEnabled && !pinnedShelfExpanded ? selectPinnedSidebarPreview(pinnedThreads) : null;
+  const hiddenPinCount = resolvePinnedSidebarHiddenCount({
+    threads: pinnedThreads,
+    visibleThreads: visiblePinnedThreads,
+    threadKey: threadShellKey,
   });
   const visibleActiveThreads = idleShelfExpanded
-    ? filterForLens(activeThreads)
+    ? activeThreads
     : routeThreadOnly(activeThreads, routeRowThreadKey);
   const groupedActive =
     hermesHomeStates.length === 0
@@ -674,9 +676,7 @@ function useSidebarThreads(input: {
       key,
       collapsed,
       conversations,
-      threads: collapsed
-        ? routeThreadOnly(conversations, routeRowThreadKey)
-        : filterForLens(conversations),
+      threads: collapsed ? routeThreadOnly(conversations, routeRowThreadKey) : conversations,
     };
   });
   const projectFolders =
@@ -694,11 +694,9 @@ function useSidebarThreads(input: {
               // A closed folder still shows the open thread, and hints at the rest.
               threads: collapsed
                 ? routeThreadOnly(folder.threads, routeRowThreadKey)
-                : filterForLens(folder.threads),
+                : folder.threads,
               hiddenThreads: collapsed
-                ? filterForLens(folder.threads).filter(
-                    (thread) => threadShellKey(thread) !== routeRowThreadKey,
-                  )
+                ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
                 : EMPTY_THREADS,
             };
           },
@@ -711,11 +709,16 @@ function useSidebarThreads(input: {
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
   ];
-  const orderedThreads = [
-    ...visiblePinnedThreads,
-    ...hermesHomes.flatMap((group) => group.threads),
-    ...afterHermesThreads,
-  ];
+  const orderedThreads =
+    lens === "all"
+      ? [
+          ...visiblePinnedThreads,
+          ...hermesHomes.flatMap((group) => group.threads),
+          ...afterHermesThreads,
+        ]
+      : selectedOutsideLens
+        ? [...lensMatches, selectedOutsideLens]
+        : lensMatches;
   const sectionByThreadKey = new Map<string, SidebarSection>();
   for (const [list, section] of [
     [pinnedThreads, "pinned"],
@@ -778,6 +781,8 @@ function useSidebarThreads(input: {
     visibleSnoozedThreads,
     visibleWorkingThreads,
     visiblePinnedThreads,
+    pinnedPreviewThread,
+    hiddenPinCount,
     visibleActiveThreads,
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     afterHermesThreads,
@@ -1317,6 +1322,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : scopedThreadKey(resolveListedAncestorThreadRef(routeThreadRef, threads));
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const activeConversationLens = conversationOrganizationEnabled ? conversationLens : "all";
+  const isFilteringConversations = activeConversationLens !== "all";
   // The open draft's first send names its thread in place; a finalized draft reached by
   // navigation resolves through its redirect instead, and still reveals.
   const routeKeyInPlace = routeDraftThread?.promotedTo != null;
@@ -1547,6 +1553,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     visibleSnoozedThreads,
     visibleWorkingThreads,
     visiblePinnedThreads,
+    pinnedPreviewThread,
+    hiddenPinCount,
     visibleActiveThreads,
     orderedThreadKeys,
     afterHermesThreads,
@@ -1714,6 +1722,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     scopedProjectKeys,
     routeDraftIdForRows,
     draftTerminalLabels,
+    pinnedStatusEnabled && activeConversationLens !== "all",
   );
 
   const draftEnvironments = useComposerDraftStore(
@@ -1783,18 +1792,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const draftIdByRowKey = new Map<string, DraftId>(
     listedDraftIds.map((id) => [draftRowKey(id), id]),
   );
+  const hasOpenOutsideFilter = selectedOutsideLens !== undefined || lensDraftIds.length > 0;
   const orderedRowKeys =
     isSearchingThreads || !pinnedStatusEnabled
       ? [...draftIdByRowKey.keys(), ...orderedThreadKeys]
-      : [
-          ...codingDraftIds.map(draftRowKey),
-          ...visiblePinnedThreads.map(threadShellKey),
-          ...hermesHomesWithDrafts.flatMap((group) => [
-            ...group.draftIds.map(draftRowKey),
-            ...group.threads.map(threadShellKey),
-          ]),
-          ...afterHermesThreads.map(threadShellKey),
-        ];
+      : isFilteringConversations
+        ? [...orderedThreadKeys, ...draftIdByRowKey.keys()]
+        : [
+            ...codingDraftIds.map(draftRowKey),
+            ...visiblePinnedThreads.map(threadShellKey),
+            ...hermesHomesWithDrafts.flatMap((group) => [
+              ...group.draftIds.map(draftRowKey),
+              ...group.threads.map(threadShellKey),
+            ]),
+            ...afterHermesThreads.map(threadShellKey),
+          ];
   const routeDraftRowKey = `draft:${routeDraftIdForRows}`;
   const routeRowKey = draftIdByRowKey.has(routeDraftRowKey) ? routeDraftRowKey : routeRowThreadKey;
 
@@ -2316,6 +2328,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
         return { kind: "thread", key, section };
       });
+    if (isFilteringConversations) {
+      return orderedThreadKeys.map((key) => ({
+        kind: "thread",
+        key,
+        section: sectionByThreadKey.get(key)!,
+      }));
+    }
     // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
     if (
       !hasProjectFolders &&
@@ -3675,27 +3694,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 <div
                   role="group"
                   aria-label={gt("Filter loaded conversations")}
-                  className="flex flex-wrap gap-1"
+                  className="flex h-7 items-center gap-4"
                 >
                   {(
                     [
-                      ["all", gt("All"), null],
+                      ["all", gt("All"), conversationCounts.all],
                       ["needs-you", gt("Needs you"), conversationCounts["needs-you"]],
                       ["running", gt("Running"), conversationCounts.running],
                     ] as const
                   ).map(([lens, label, count]) => (
-                    <Button
+                    <button
+                      type="button"
                       key={lens}
                       aria-pressed={activeConversationLens === lens}
-                      size="compact"
-                      variant={activeConversationLens === lens ? "secondary" : "ghost"}
+                      className="inline-flex h-7 cursor-pointer items-center gap-1 border-b-2 border-transparent text-sm font-medium text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-pressed:border-sidebar-foreground aria-pressed:text-sidebar-foreground"
                       onClick={() => setConversationLens(lens)}
                     >
                       {label}
                       {count !== null ? (
-                        <span className="text-muted-foreground tabular-nums">{count}</span>
+                        <span className="text-2xs text-muted-foreground tabular-nums">{count}</span>
                       ) : null}
-                    </Button>
+                    </button>
                   ))}
                 </div>
                 {conversationCounts.unknown > 0 ? (
@@ -3704,12 +3723,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       "{count, plural, one {Status not checked for # loaded conversation} other {Status not checked for # loaded conversations}}",
                       { count: conversationCounts.unknown },
                     )}
-                  </p>
-                ) : null}
-                {selectedOutsideLens ||
-                (activeConversationLens !== "all" && routeDraftIdForRows !== null) ? (
-                  <p className="px-1 text-xs text-muted-foreground">
-                    {gt("The open conversation stays visible outside the filter.")}
                   </p>
                 ) : null}
               </div>
@@ -3803,6 +3816,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ) : null}
           {/* A scope can hide every active thread; say so even when its project still has settled ones. */}
           {!isSearchingThreads &&
+          !isFilteringConversations &&
           !hasProjectFolders &&
           visibleDraftSessionCount === 0 &&
           pinnedThreads.length +
@@ -3887,6 +3901,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     )}
                   >
                     {(() => {
+                      const hermesHomeDisplayNameByKey = new Map(
+                        hermesHomeStates.map(
+                          (state) =>
+                            [
+                              `${state.home.environmentId}:${state.home.instanceId}`,
+                              state.home.displayName,
+                            ] as const,
+                        ),
+                      );
                       const renderThreadRow = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
@@ -3902,9 +3925,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           ? folderRowsMultiline
                             ? "folder-multiline"
                             : "folder"
-                          : isCard
-                            ? "card"
-                            : "slim";
+                          : isFilteringConversations
+                            ? "slim"
+                            : isCard
+                              ? pinnedStatusEnabled
+                                ? "organization"
+                                : "card"
+                              : "slim";
+                        const isCompactPinnedPreview =
+                          rowVariant === "organization" &&
+                          pinnedPreviewThread !== null &&
+                          threadShellKey(thread) === threadShellKey(pinnedPreviewThread);
                         const bindings = scheduledTaskBindings
                           .get(thread.environmentId)
                           ?.get(thread.id);
@@ -3933,14 +3964,26 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             thread={thread}
                             scheduleTriggerLabel={scheduleTriggerLabel}
                             variant={rowVariant}
+                            organizationEnabled={
+                              pinnedStatusEnabled &&
+                              !folderRow &&
+                              (isFilteringConversations || isCard)
+                            }
+                            compactPinnedPreview={isCompactPinnedPreview}
+                            preserveFailedStatus={
+                              isCompactPinnedPreview &&
+                              resolveSidebarThreadStatus(thread) === "failed"
+                            }
                             navigationParent={
-                              folderRow ??
-                              (section === "pinned" ||
-                              section === "working" ||
-                              section === "snoozed" ||
-                              section === "settled"
-                                ? `shelf:${section}`
-                                : undefined)
+                              isFilteringConversations
+                                ? undefined
+                                : (folderRow ??
+                                  (section === "pinned" ||
+                                  section === "working" ||
+                                  section === "snoozed" ||
+                                  section === "settled"
+                                    ? `shelf:${section}`
+                                    : undefined))
                             }
                             variantAction={
                               section === "snoozed"
@@ -3994,9 +4037,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               null
                             }
                             projectDisplayName={
+                              hermesHomeDisplayNameByKey.get(
+                                `${thread.environmentId}:${
+                                  thread.runtime?.providerInstanceId ??
+                                  thread.modelSelection.instanceId
+                                }`,
+                              ) ??
                               projectDisplayNameByKey.get(
                                 `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
+                              ) ??
+                              null
                             }
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??
@@ -4024,7 +4074,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
-                      const renderDrafts = (ids: readonly DraftId[], hermesHomeRowId?: string) => (
+                      const renderDrafts = (
+                        ids: readonly DraftId[],
+                        hermesHomeRowId?: string,
+                        showEmptyDraftFallback = false,
+                      ) => (
                         <SidebarDraftBlock
                           key={`draft-sessions:${hermesHomeRowId ?? "coding"}`}
                           draftIds={ids}
@@ -4036,10 +4090,51 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           routeDraftId={routeDraftIdForRows}
+                          showEmptyDraftFallback={showEmptyDraftFallback}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
                         />
                       );
+                      if (isFilteringConversations) {
+                        const items: ReactNode[] = [];
+                        if (conversationCounts[activeConversationLens] === 0) {
+                          items.push(
+                            <li
+                              key="empty-filter"
+                              className="list-none px-2 py-2 text-sm text-sidebar-foreground"
+                              role="status"
+                            >
+                              {activeConversationLens === "needs-you"
+                                ? gt("Nothing needs you")
+                                : gt("Nothing is running")}
+                            </li>,
+                          );
+                        }
+                        const openLabel = hasOpenOutsideFilter ? (
+                          <li
+                            key="open-outside-filter"
+                            className="mt-2 list-none border-t border-sidebar-border px-2 pt-2 pb-1 text-xs text-sidebar-muted-foreground"
+                          >
+                            {gt("Open conversation (outside filter)")}
+                          </li>
+                        ) : null;
+                        let openLabelShown = false;
+                        for (const item of sidebarListItems) {
+                          if (item.kind !== "thread") continue;
+                          const thread = threadByKey.get(item.key)!;
+                          if (thread === selectedOutsideLens) {
+                            items.push(openLabel);
+                            openLabelShown = true;
+                          }
+                          items.push(renderThreadRow(thread, item.section));
+                        }
+                        if (lensDraftIds.length > 0)
+                          items.push(
+                            openLabelShown ? null : openLabel,
+                            renderDrafts(lensDraftIds, undefined, true),
+                          );
+                        return items;
+                      }
                       const items: ReactNode[] = [renderDrafts(codingDraftIds)];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
@@ -4095,16 +4190,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               items.push(renderThreadRow(thread, "active", rowId));
                             }
                           }
-                          if (pinnedStatusEnabled) {
-                            items.push(
-                              <li
-                                key="coding-projects-heading"
-                                className="mt-3 list-none px-(--sidebar-row-content-inset) py-1 text-sm font-medium text-sidebar-muted-foreground"
-                              >
-                                {gt("Coding projects")}
-                              </li>,
-                            );
-                          }
                           for (const folder of projectFolders) {
                             items.push(
                               <SidebarProjectFolderHeader
@@ -4139,6 +4224,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   label={gt("Pinned", { $context: "sidebar section" })}
                                   count={pinnedThreads.length}
                                   pinnedStatusEnabled={pinnedStatusEnabled}
+                                  hiddenPinCount={
+                                    !pinnedShelfExpanded && pinnedStatusEnabled
+                                      ? hiddenPinCount
+                                      : undefined
+                                  }
+                                  onShowMore={
+                                    !pinnedShelfExpanded && pinnedStatusEnabled
+                                      ? togglePinnedShelf
+                                      : undefined
+                                  }
                                   hiddenThreads={
                                     pinnedShelfExpanded
                                       ? undefined

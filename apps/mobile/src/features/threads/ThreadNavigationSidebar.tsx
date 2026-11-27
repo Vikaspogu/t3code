@@ -310,6 +310,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     shelfPreferencesLoaded,
     workingShelfEnabled,
     pinnedShelfExpanded,
+    pinnedStatusEnabled: sidebarPinnedStatusEnabled,
     idleShelfExpanded,
     workingShelfExpanded,
     snoozedShelfExpanded,
@@ -442,6 +443,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             hasQueuedMessages={item.hasQueuedMessages}
             snoozed={item.item.snoozed}
             pinned={item.item.pinned}
+            preserveFailedStatus={item.item.preserveFailedStatus}
             wokeAt={item.item.wokeAt}
             snoozePresetMinute={item.snoozePresetMinute ?? ""}
             snoozeWakeLabelText={item.snoozeWakeLabelText}
@@ -516,6 +518,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             expanded={item.expanded}
             onToggle={togglePinnedShelf}
             dot={item.dot}
+            summary={item.summary}
+            hiddenCount={item.hiddenCount}
             pane="sidebar"
           />
         );

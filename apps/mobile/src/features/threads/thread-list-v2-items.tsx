@@ -20,6 +20,7 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import type { summarizeStatuses } from "@t3tools/client-runtime/state/pinned-summary";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import {
   formatWorkingDurationLabel,
@@ -38,7 +39,14 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { useNavigation } from "@react-navigation/native";
 import { msg, T, useGT, useMessages } from "gt-react-native";
 import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
-import { Platform, Pressable, Text as RNText, useWindowDimensions, View } from "react-native";
+import {
+  Platform,
+  Pressable,
+  Text as RNText,
+  ScrollView,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
@@ -251,6 +259,7 @@ function ThreadListV2Section(props: {
   readonly label: string;
   readonly pane?: "screen" | "sidebar";
   readonly tone?: "default" | "snoozed";
+  readonly labelStrong?: boolean;
   readonly disclosure?: {
     readonly expanded: boolean;
     readonly disabled?: boolean;
@@ -267,20 +276,22 @@ function ThreadListV2Section(props: {
     "mb-1.5 mt-4 flex-row items-center gap-2.5",
     props.pane === "sidebar" ? "px-3" : "px-5",
   );
+  const Label = props.labelStrong ? RNText : Text;
   const content = (
     <>
-      <Text
+      <Label
         className={cn(
-          "text-xs font-t3-medium",
+          props.labelStrong ? "text-xs" : "text-xs font-t3-medium",
           sidebarPane
             ? "text-drawer-foreground-muted"
             : snoozed
               ? "text-foreground-secondary"
               : "text-foreground-tertiary",
         )}
+        style={props.labelStrong ? { fontWeight: "600" } : undefined}
       >
         {props.label}
-      </Text>
+      </Label>
       {props.dot ? (
         <View
           aria-hidden
@@ -346,6 +357,8 @@ type ThreadListV2ShelfHeaderProps = {
   readonly onToggle: () => void;
   readonly pane?: "screen" | "sidebar";
   readonly dot?: ThreadListV2ShelfDot | null;
+  readonly summary?: ReturnType<typeof summarizeStatuses> | null;
+  readonly hiddenCount?: number;
 };
 
 const SHELF_COPY = {
@@ -381,6 +394,29 @@ const SHELF_COPY = {
   },
 } as const;
 
+function resolvePinnedShelfSummaryLabels(
+  summary: ReturnType<typeof summarizeStatuses>,
+  hiddenCount: number,
+  count: number,
+  gt: ReturnType<typeof useGT>,
+) {
+  return {
+    statuses: [
+      summary.attention > 0
+        ? gt("{count, plural, other {{count} needs you}}", { count: summary.attention })
+        : null,
+      summary.failed > 0
+        ? gt("{count, plural, other {{count} failed}}", { count: summary.failed })
+        : null,
+      summary.done > 0 ? gt("{count, plural, other {{count} new}}", { count: summary.done }) : null,
+      summary.working > 0
+        ? gt("{count, plural, other {{count} working}}", { count: summary.working })
+        : null,
+    ].filter((label): label is string => label !== null),
+    hidden: hiddenCount > 0 ? gt("{hiddenCount} of {count} hidden", { hiddenCount, count }) : null,
+  };
+}
+
 function ThreadListV2ShelfHeader(
   props: ThreadListV2ShelfHeaderProps & { readonly kind: keyof typeof SHELF_COPY },
 ) {
@@ -389,17 +425,35 @@ function ThreadListV2ShelfHeader(
   const copy = SHELF_COPY[props.kind];
   const label = m(copy.label);
   const countLabel = m(copy.count, { count: props.count });
+  const summary =
+    props.kind === "pinned" && !props.expanded && props.summary
+      ? resolvePinnedShelfSummaryLabels(props.summary, props.hiddenCount ?? 0, props.count, gt)
+      : null;
+  const accessibilityLabel = [
+    props.dot ? m(SHELF_DOT_LABEL[props.dot], { countLabel }) : countLabel,
+    ...(summary?.statuses ?? []),
+    summary?.hidden ?? null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(", ");
   return (
     <ThreadListV2Section
-      label={props.expanded ? label : gt("{label} ({count})", { label, count: props.count })}
-      pane={props.pane}
+      label={
+        summary
+          ? gt("{label} {count}", { label, count: props.count })
+          : props.expanded
+            ? label
+            : gt("{label} ({count})", { label, count: props.count })
+      }
+      labelStrong={summary !== null}
       dot={props.dot}
+      pane={props.pane}
       tone={props.kind === "snoozed" ? "snoozed" : "default"}
       disclosure={{
         expanded: props.expanded,
         disabled: props.disabled,
         onToggle: props.onToggle,
-        accessibilityLabel: props.dot ? m(SHELF_DOT_LABEL[props.dot], { countLabel }) : countLabel,
+        accessibilityLabel,
         accessibilityHint: m(props.expanded ? copy.collapse : copy.expand),
       }}
     />
@@ -409,7 +463,37 @@ function ThreadListV2ShelfHeader(
 export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShelfHeader(
   props: ThreadListV2ShelfHeaderProps,
 ) {
-  return <ThreadListV2ShelfHeader {...props} kind="pinned" />;
+  const gt = useGT();
+  const summary =
+    !props.expanded && props.summary
+      ? resolvePinnedShelfSummaryLabels(props.summary, props.hiddenCount ?? 0, props.count, gt)
+      : null;
+  return (
+    <View>
+      <ThreadListV2ShelfHeader {...props} kind="pinned" />
+      {summary && (summary.statuses.length > 0 || summary.hidden !== null) ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          className={props.pane === "sidebar" ? "mb-1.5 px-3" : "mb-1.5 px-5"}
+          contentContainerClassName="flex-row gap-3"
+        >
+          {summary.statuses.length > 0 ? (
+            <Text className="text-xs text-foreground-secondary" style={{ fontSize: 11 }}>
+              {summary.statuses.join(" · ")}
+            </Text>
+          ) : null}
+          {summary.hidden ? (
+            <Text className="text-xs text-foreground-secondary" style={{ fontSize: 11 }}>
+              {summary.hidden}
+            </Text>
+          ) : null}
+        </ScrollView>
+      ) : null}
+    </View>
+  );
 });
 
 export const ThreadListV2IdleShelfHeader = memo(function ThreadListV2IdleShelfHeader(
@@ -798,6 +882,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly hasQueuedMessages?: boolean;
   readonly snoozed?: boolean;
   readonly pinned?: boolean;
+  readonly preserveFailedStatus?: boolean;
   readonly wokeAt: string | null;
   readonly snoozeWakeLabelText?: string;
   readonly timeLabel: string;
@@ -918,7 +1003,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
 
   const rawStatus = resolveThreadListV2Status(thread);
-  const status = resolveThreadListV2RowStatus(thread);
+  const status = resolveThreadListV2RowStatus(thread, {
+    preserveFailedStatus: props.preserveFailedStatus,
+  });
   const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
   const workingLabel = STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;
