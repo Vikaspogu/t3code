@@ -221,13 +221,14 @@ export const makeHermesAdapterV2 = (input: {
   readonly instanceId: ProviderAdapter.ProviderAdapterV2["Service"]["instanceId"];
   readonly settings?: HermesSettingsValue;
   readonly environment?: NodeJS.ProcessEnv;
-  // Internal harness only. The built-in driver does not opt in.
-  readonly enableTextTurnsForTest?: boolean;
+  // HermesDriver opts in; direct adapter consumers keep the conservative default.
+  readonly enableTextTurns?: boolean;
   readonly resolveAttachmentPath?: (
     attachment: ProviderAdapter.ProviderAdapterV2TurnMessage["attachments"][number],
   ) => string | null;
 }): ProviderAdapter.ProviderAdapterV2["Service"] => {
   const settings = { ...DEFAULT_SETTINGS, ...input.settings };
+  const textTurnsEnabled = input.enableTextTurns === true;
   const environment = input.environment ?? process.env;
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: input.instanceId,
@@ -1777,7 +1778,7 @@ export const makeHermesAdapterV2 = (input: {
           updatedAt: now,
           lastError: null,
         },
-        canResumeAfterRestart: input.enableTextTurnsForTest === true,
+        canResumeAfterRestart: textTurnsEnabled,
         events: Stream.fromQueue(output),
         ensureThread: Effect.fn("HermesAdapterV2.ensureThread")(function* (
           ensureInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput,
@@ -1913,7 +1914,7 @@ export const makeHermesAdapterV2 = (input: {
           return providerThread;
         }),
         startTurn: Effect.fn("HermesAdapterV2.startTurn")(function* (turnInput) {
-          if (!input.enableTextTurnsForTest) {
+          if (!textTurnsEnabled) {
             return yield* protocolError(
               "Hermes turns are unavailable until recovery and controls are ready",
             );
@@ -2189,7 +2190,7 @@ export const makeHermesAdapterV2 = (input: {
           );
           yield* Deferred.await(admitted);
         }),
-        ...(input.enableTextTurnsForTest === true
+        ...(textTurnsEnabled
           ? {
               resumeTurn: (resumeInput: ProviderAdapter.ProviderAdapterV2ResumeTurnInput) =>
                 runtime.startTurn(ProviderAdapter.resumeTurnInput(resumeInput)),
@@ -2201,7 +2202,7 @@ export const makeHermesAdapterV2 = (input: {
           providerTurnId,
           requestRuntimeRestart,
         }) {
-          if (!input.enableTextTurnsForTest || requestRuntimeRestart) {
+          if (!textTurnsEnabled || requestRuntimeRestart) {
             return yield* protocolError("Hermes interruption or runtime restart is unavailable");
           }
           const threadId = providerThread.appThreadId;

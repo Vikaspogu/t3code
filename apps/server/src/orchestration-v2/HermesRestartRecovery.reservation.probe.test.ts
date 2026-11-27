@@ -168,7 +168,7 @@ it.live.each([
           profileId: "/profile",
           principalId: "uid:1000",
         }),
-        enableTextTurnsForTest: true,
+        enableTextTurns: true,
       });
       const adapterLayer = Registry.layerSingle(adapter);
       const databaseLayer = SqlitePersistence.layerFromPath(
