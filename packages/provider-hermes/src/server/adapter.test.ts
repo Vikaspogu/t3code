@@ -419,6 +419,7 @@ describe("HermesAdapterV2 G1 lifecycle", () => {
       const adapter = makeHermesAdapterV2({
         instanceId,
         settings,
+        enableTextTurns: false,
       });
       const capabilities = yield* adapter.getCapabilities();
       expect(capabilities.threads.canRollbackThread).toBe(false);
@@ -1264,7 +1265,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurnsForTest: true });
+        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-mutation"),
@@ -1349,7 +1350,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         }
       })();
 
-      const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurnsForTest: true });
+      const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
       const opened = yield* adapter.openSession({
         threadId,
         providerSessionId: ProviderSessionId.make("provider-session-g2"),
@@ -1626,7 +1627,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
           makeHermesAdapterV2({
             instanceId,
             settings: decodeHermesSettings({ ...settings, principalId }),
-            enableTextTurnsForTest: true,
+            enableTextTurns: true,
           }).openSession(sessionInput);
         const original = yield* open("uid:1000");
         const providerThread = yield* original.ensureThread(sessionInput);
@@ -1677,7 +1678,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurnsForTest: true });
+        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g2"),
@@ -1880,7 +1881,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const adapter = makeHermesAdapterV2({
           instanceId,
           settings,
-          enableTextTurnsForTest: true,
+          enableTextTurns: true,
         });
         const opened = yield* adapter.openSession({
           threadId,
@@ -1946,7 +1947,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const adapter = makeHermesAdapterV2({
           instanceId,
           settings,
-          enableTextTurnsForTest: true,
+          enableTextTurns: true,
         });
         const opened = yield* adapter.openSession({
           threadId,
@@ -1986,15 +1987,14 @@ describe("HermesAdapterV2 G2 text turns", () => {
         cleanups.push(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
         const state = installSocket();
         state.dropNextSubmit = mode === "gap" || mode === "epoch" || mode === "authority";
-        if (state.dropNextSubmit && mode !== "refusal" && mode !== "disabled")
-          state.replayMode = mode;
+        if (mode === "gap" || mode === "epoch" || mode === "authority") state.replayMode = mode;
         state.refuseSubmit = mode === "refusal";
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
         const adapter = makeHermesAdapterV2({
           instanceId,
           settings,
-          enableTextTurnsForTest: mode !== "disabled",
+          enableTextTurns: mode !== "disabled",
         });
         const opened = yield* adapter.openSession({
           threadId,
@@ -2035,7 +2035,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurnsForTest: true });
+        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3"),
@@ -2305,7 +2305,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
           const adapter = makeHermesAdapterV2({
             instanceId,
             settings,
-            enableTextTurnsForTest: true,
+            enableTextTurns: true,
           });
           const runtimePolicy = {
             cwd,
@@ -2388,7 +2388,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
             const adapter = makeHermesAdapterV2({
               instanceId,
               settings,
-              enableTextTurnsForTest: true,
+              enableTextTurns: true,
             });
             const opened = yield* adapter.openSession({
               threadId,
@@ -2450,7 +2450,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
             const adapter = makeHermesAdapterV2({
               instanceId,
               settings,
-              enableTextTurnsForTest: true,
+              enableTextTurns: true,
             });
             const opened = yield* adapter.openSession({
               threadId,
@@ -2650,7 +2650,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurnsForTest: true });
+        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-answer-fault"),
@@ -2722,7 +2722,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurnsForTest: true });
+        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-resolution"),
@@ -2794,7 +2794,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurnsForTest: true });
+        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-turn-journal"),
@@ -2833,7 +2833,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const state = installSocket();
         const settings = configure(directory);
         const cwd = NodePath.join(directory, "work");
-        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurnsForTest: true });
+        const adapter = makeHermesAdapterV2({ instanceId, settings, enableTextTurns: true });
         const opened = yield* adapter.openSession({
           threadId,
           providerSessionId: ProviderSessionId.make("provider-session-g3-journal"),
@@ -2897,7 +2897,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
           const adapter = makeHermesAdapterV2({
             instanceId,
             settings,
-            enableTextTurnsForTest: true,
+            enableTextTurns: true,
           });
           const opened = yield* adapter.openSession({
             threadId,
@@ -2957,7 +2957,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
           const adapter = makeHermesAdapterV2({
             instanceId,
             settings,
-            enableTextTurnsForTest: true,
+            enableTextTurns: true,
           });
           const opened = yield* adapter.openSession({
             threadId,
@@ -3101,7 +3101,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
           const adapter = makeHermesAdapterV2({
             instanceId,
             settings,
-            enableTextTurnsForTest: true,
+            enableTextTurns: true,
           });
           const opened = yield* adapter.openSession({
             threadId,
@@ -3382,7 +3382,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
           const adapter = makeHermesAdapterV2({
             instanceId,
             settings,
-            enableTextTurnsForTest: true,
+            enableTextTurns: true,
             resolveAttachmentPath: () => imagePath,
           });
           const opened = yield* adapter.openSession({
@@ -3436,7 +3436,7 @@ describe("HermesAdapterV2 G2 text turns", () => {
         const adapter = makeHermesAdapterV2({
           instanceId,
           settings,
-          enableTextTurnsForTest: true,
+          enableTextTurns: true,
           resolveAttachmentPath: () => imagePath,
         });
         const opened = yield* adapter.openSession({

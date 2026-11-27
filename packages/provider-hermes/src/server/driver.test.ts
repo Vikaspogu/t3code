@@ -7,11 +7,19 @@ import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HermesDriver } from "./driver.ts";
+import { makeHermesAdapterV2 } from "./adapter.ts";
+import { vi } from "vite-plus/test";
+
+vi.mock("./adapter.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./adapter.ts")>();
+  return { ...actual, makeHermesAdapterV2: vi.fn(actual.makeHermesAdapterV2) };
+});
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  vi.mocked(makeHermesAdapterV2).mockClear();
 });
 
 const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
@@ -41,6 +49,9 @@ it.layer(layerTest)("HermesDriver", (it) => {
         ],
       }).pipe(Effect.provideService(HostProcess.HomeDirectory, "/home/ada"));
 
+      expect(makeHermesAdapterV2).toHaveBeenCalledWith(
+        expect.objectContaining({ enableTextTurns: true }),
+      );
       const snapshot = yield* instance.snapshot.refresh;
       expect(snapshot.status).toBe("error");
       expect(snapshot.auth.status).toBe("unauthenticated");

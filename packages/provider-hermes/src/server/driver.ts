@@ -98,6 +98,7 @@ export const HermesDriver: ProviderDriver<HermesSettingsValue, ProviderHost.Prov
       instanceId: input.instanceId,
       settings: config,
       environment,
+      enableTextTurns: true,
       resolveAttachmentPath: host.resolveAttachmentPath,
     });
     return {
