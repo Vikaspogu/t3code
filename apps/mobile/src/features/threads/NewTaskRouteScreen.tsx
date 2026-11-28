@@ -1,5 +1,11 @@
 import { isDraftThreadRoute } from "./thread-route-state";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
+import { attachedHermesHomes } from "@t3tools/client-runtime/state/conversation-organization";
+import {
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  type ProjectId,
+} from "@t3tools/contracts";
 import { msg, T, useGT, useMessages } from "gt-react-native";
 import * as Dialog from "../../components/ui/Dialog";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -20,7 +26,9 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cn } from "../../lib/cn";
@@ -30,10 +38,20 @@ import { Button } from "../../components/ui/Button";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { ProviderIcon } from "../../components/ProviderIcon";
 import { useProjects, useServerConfigs } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { environmentShell } from "../../state/shell";
+import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { retargetSavedNewTaskDraft } from "../../state/use-composer-drafts";
+import {
+  createNewTaskDraft,
+  retargetSavedNewTaskDraft,
+  waitForComposerDraftsLoaded,
+} from "../../state/use-composer-drafts";
+import { resolveHermesHomeModel } from "../../lib/modelOptions";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import type { MessageResolver } from "../../i18n/messages";
@@ -171,7 +189,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
   const m = useMessages();
   const projects = useProjects();
   const [searchText, setSearchText] = useState("");
-  const { projectScopes, selectedEnvironmentId, setProject } = useNewTaskFlow();
+  const { projectScopes, selectedEnvironmentId, selectedProjectKey, setProject } = useNewTaskFlow();
   const { state: catalogState } = useWorkspaceState();
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
@@ -227,6 +245,8 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
   const openScratch = useAtomCommand(projectEnvironment.openScratch, {
     reportFailure: false,
   });
+  const startingHermesRef = useRef<AbortController | null>(null);
+  const [startingHermes, setStartingHermes] = useState(false);
   const scratchOption =
     reservedDestinationProject === null
       ? resolveNewTaskScratchOption({
@@ -235,11 +255,58 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
           selectedEnvironmentId,
         })
       : null;
-  const canStartScratch = scratchOption?.ready === true;
+  function previousThreadRoute() {
+    const root = navigation.getState()?.routeNames.includes("NewTaskProject")
+      ? navigation
+      : navigation.getParent();
+    const rootState = root?.getState();
+    return { root, route: rootState?.routes[rootState.index - 1] };
+  }
+
+  const changingDraft =
+    routeDraftId === undefined &&
+    selectedProjectKey !== null &&
+    isDraftThreadRoute(previousThreadRoute().route);
+  const hermesHomes = useMemo(
+    () =>
+      routeShareId === undefined && routeDraftId === undefined && !changingDraft
+        ? attachedHermesHomes(
+            Array.from(serverConfigs).flatMap(([environmentId, config]) =>
+              config.settings ? [[environmentId, config.settings] as const] : [],
+            ),
+          ).filter((home) => home.enabled)
+        : [],
+    [changingDraft, routeShareId, routeDraftId, serverConfigs],
+  );
+  const operatedHermesEnvironments = useEnvironmentsWithScope(
+    hermesHomes,
+    AuthOrchestrationOperateScope,
+  );
+  const liveHermesEnvironments = useAtomValue(
+    useMemo(
+      () =>
+        Atom.make((get) => {
+          const live = new Set<EnvironmentId>();
+          for (const home of hermesHomes) {
+            if (get(environmentShell.statusAtom(home.environmentId)) === "live") {
+              live.add(home.environmentId);
+            }
+          }
+          return live;
+        }),
+      [hermesHomes],
+    ),
+  );
+  const canStartScratch = scratchOption?.ready === true && !startingHermes;
   const pendingScratchRef = useRef<AbortController | null>(null);
   const cancelPendingScratch = useCallback(() => {
-    pendingScratchRef.current?.abort();
+    const pending = pendingScratchRef.current;
+    pending?.abort();
     pendingScratchRef.current = null;
+    if (startingHermesRef.current === pending) {
+      startingHermesRef.current = null;
+      setStartingHermes(false);
+    }
   }, []);
   useFocusEffect(useCallback(() => cancelPendingScratch, [cancelPendingScratch]));
 
@@ -258,11 +325,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
       }
       if (signal?.aborted) return;
     }
-    const root = navigation.getState()?.routeNames.includes("NewTaskProject")
-      ? navigation
-      : navigation.getParent();
-    const rootState = root?.getState();
-    const threadRoute = rootState?.routes[rootState.index - 1];
+    const { root, route: threadRoute } = previousThreadRoute();
     if (routeDraftId === undefined && isDraftThreadRoute(threadRoute)) {
       setProject(project);
       root?.goBack();
@@ -312,7 +375,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
     const environmentId = scratchOption.environmentId;
     const request = new AbortController();
     pendingScratchRef.current = request;
-    const result = await openScratch({ environmentId, input: {} });
+    const result = await openScratch({ environmentId, input: {} }, { signal: request.signal });
     if (request.signal.aborted) return;
     if (result._tag === "Failure") {
       pendingScratchRef.current = null;
@@ -330,6 +393,86 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
     if (pendingScratchRef.current === request) pendingScratchRef.current = null;
   }
 
+  function isHermesHomeLiveAndAllowed(environmentId: EnvironmentId) {
+    return (
+      appAtomRegistry.get(environmentShell.statusAtom(environmentId)) === "live" &&
+      readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+    );
+  }
+
+  function readHermesConfig(environmentId: EnvironmentId) {
+    return appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
+  }
+
+  function isHermesHomeReady(home: (typeof hermesHomes)[number]) {
+    return (
+      liveHermesEnvironments.has(home.environmentId) &&
+      operatedHermesEnvironments.has(home.environmentId) &&
+      readCurrentHermesHomeModel(home) !== null
+    );
+  }
+
+  function readCurrentHermesHomeModel(
+    home: (typeof hermesHomes)[number],
+    projectId: ProjectId | null = null,
+  ) {
+    return resolveHermesHomeModel(
+      readHermesConfig(home.environmentId),
+      home.instanceId,
+      projectId,
+      isHermesHomeLiveAndAllowed(home.environmentId),
+    );
+  }
+
+  async function startHermesConversation(home: (typeof hermesHomes)[number]): Promise<void> {
+    if (!readCurrentHermesHomeModel(home) || startingHermesRef.current) return;
+    cancelPendingScratch();
+    const request = new AbortController();
+    startingHermesRef.current = request;
+    pendingScratchRef.current = request;
+    setStartingHermes(true);
+    await (async () => {
+      await waitForComposerDraftsLoaded();
+      if (request.signal.aborted) return;
+      if (!readCurrentHermesHomeModel(home)) {
+        Dialog.alert(gt("Provider unavailable"));
+        return;
+      }
+      const result = await openScratch(
+        { environmentId: home.environmentId, input: {} },
+        { signal: request.signal },
+      );
+      if (request.signal.aborted) return;
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) Dialog.alert(gt("Could not open draft"));
+        return;
+      }
+      const project = result.value;
+      const selection = readCurrentHermesHomeModel(home, project.id);
+      if (project.environmentId !== home.environmentId || !selection) {
+        Dialog.alert(gt("Provider unavailable"));
+        return;
+      }
+      const draftId = createNewTaskDraft(
+        { environmentId: home.environmentId, projectId: project.id },
+        selection,
+      );
+      selectDetail({
+        name: "Thread",
+        params: { draft: { draftId, title: home.displayName } },
+      });
+    })()
+      .catch(() => {
+        if (!request.signal.aborted) Dialog.alert(gt("Could not open draft"));
+      })
+      .finally(() => {
+        if (pendingScratchRef.current === request) pendingScratchRef.current = null;
+        if (startingHermesRef.current === request) {
+          startingHermesRef.current = null;
+          setStartingHermes(false);
+        }
+      });
+  }
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- navigates to the incoming share's reserved destination draft once its project loads and the screen is focused
   useEffect(() => {
     const destination = incomingShare?.destination;
@@ -363,6 +506,70 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
     });
   }, [incomingShare, isFocused, reservedDestinationProject, selectDetail]);
 
+  const hermesRows = hermesHomes.map((home) => {
+    const disabled = startingHermes || !isHermesHomeReady(home);
+    const environmentName =
+      connectedEnvironments.find((environment) => environment.environmentId === home.environmentId)
+        ?.environmentLabel ?? home.environmentId;
+    const hasDuplicateLabel = connectedEnvironments.some(
+      (environment) =>
+        environment.environmentId !== home.environmentId &&
+        environment.environmentLabel === environmentName,
+    );
+    const environmentLabel = hasDuplicateLabel
+      ? `${environmentName} (${home.environmentId})`
+      : environmentName;
+    const subtitle = gt("{environment} · No project", { environment: environmentLabel });
+    return Platform.OS === "android" ? (
+      <View
+        key={`${home.environmentId}:${home.instanceId}`}
+        collapsable={false}
+        className="overflow-hidden rounded-[28px] bg-grouped-card"
+      >
+        <NavigationRow
+          className="bg-grouped-card"
+          title={home.displayName}
+          subtitle={subtitle}
+          disabled={disabled}
+          onPress={() => void startHermesConversation(home)}
+          leading={<ProviderIcon provider="hermes" size={22} />}
+        />
+      </View>
+    ) : (
+      <View
+        key={`${home.environmentId}:${home.instanceId}`}
+        collapsable={false}
+        className="overflow-hidden rounded-[24px] bg-grouped-card"
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${home.displayName}, ${subtitle}`}
+          disabled={disabled}
+          onPress={() => void startHermesConversation(home)}
+          className={cn(
+            "flex-row items-center gap-3 bg-grouped-card px-4 py-3.5",
+            disabled && "opacity-45",
+          )}
+        >
+          <View className="h-7 w-7 items-center justify-center">
+            <ProviderIcon provider="hermes" size={18} />
+          </View>
+          <View className="min-w-0 flex-1">
+            <Text className="text-base font-t3-bold leading-snug">{home.displayName}</Text>
+            <Text className="text-xs leading-snug text-foreground-muted" numberOfLines={1}>
+              {subtitle}
+            </Text>
+          </View>
+          <SymbolView
+            name="chevron.right"
+            size={14}
+            tintColorClassName="accent-chevron"
+            type="monochrome"
+          />
+        </Pressable>
+      </View>
+    );
+  });
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       <NewTaskHeader
@@ -447,79 +654,83 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               </View>
             )
           ) : null}
+          {listScopes.length === 0 ? null : hermesRows}
           {listScopes.length === 0 ? (
-            <View
-              collapsable={false}
-              className={cn(
-                "items-center gap-3 px-6 py-8",
-                Platform.OS !== "android" && "rounded-[24px] bg-grouped-card",
-              )}
-            >
-              {projectEmptyState.loading ? (
-                <AppActivityIndicator colorClassName="accent-icon-muted" />
-              ) : null}
-              <Text className="text-center text-lg font-t3-bold text-foreground">
-                {projectEmptyState.title}
-              </Text>
-              <Text className="text-center text-sm leading-normal text-foreground-muted">
-                {projectEmptyState.detail}
-              </Text>
-              {Platform.OS === "android" ? (
-                <>
-                  <View>
-                    <Button
-                      label={
-                        catalogState.hasReadyEnvironment
-                          ? gt("Add new project")
-                          : gt("Add environment")
-                      }
-                      tone="primary"
-                      onPress={() =>
-                        catalogState.hasReadyEnvironment
-                          ? navigation.dispatch(StackActions.push("AddProject"))
-                          : navigation.navigate("ConnectionsNew")
-                      }
-                    />
-                  </View>
-                  {canStartScratch ? (
+            <>
+              <View
+                collapsable={false}
+                className={cn(
+                  "items-center gap-3 px-6 py-8",
+                  Platform.OS !== "android" && "rounded-[24px] bg-grouped-card",
+                )}
+              >
+                {projectEmptyState.loading ? (
+                  <AppActivityIndicator colorClassName="accent-icon-muted" />
+                ) : null}
+                <Text className="text-center text-lg font-t3-bold text-foreground">
+                  {projectEmptyState.title}
+                </Text>
+                <Text className="text-center text-sm leading-normal text-foreground-muted">
+                  {projectEmptyState.detail}
+                </Text>
+                {Platform.OS === "android" ? (
+                  <>
                     <View>
                       <Button
-                        label={gt("Start without a project")}
-                        tone="secondary"
-                        onPress={() => void startScratch()}
+                        label={
+                          catalogState.hasReadyEnvironment
+                            ? gt("Add new project")
+                            : gt("Add environment")
+                        }
+                        tone="primary"
+                        onPress={() =>
+                          catalogState.hasReadyEnvironment
+                            ? navigation.dispatch(StackActions.push("AddProject"))
+                            : navigation.navigate("ConnectionsNew")
+                        }
                       />
                     </View>
-                  ) : null}
-                </>
-              ) : !catalogState.hasReadyEnvironment ? (
-                <View className="mt-1">
-                  <Button
-                    label={gt("Add environment")}
-                    tone="primary"
-                    onPress={() => navigation.navigate("ConnectionsNew")}
-                  />
-                </View>
-              ) : (
-                <>
+                    {canStartScratch ? (
+                      <View>
+                        <Button
+                          label={gt("Start without a project")}
+                          tone="secondary"
+                          onPress={() => void startScratch()}
+                        />
+                      </View>
+                    ) : null}
+                  </>
+                ) : !catalogState.hasReadyEnvironment ? (
                   <View className="mt-1">
                     <Button
-                      label={gt("Add new project")}
+                      label={gt("Add environment")}
                       tone="primary"
-                      onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
+                      onPress={() => navigation.navigate("ConnectionsNew")}
                     />
                   </View>
-                  {canStartScratch ? (
-                    <View>
+                ) : (
+                  <>
+                    <View className="mt-1">
                       <Button
-                        label={gt("Start without a project")}
-                        tone="secondary"
-                        onPress={() => void startScratch()}
+                        label={gt("Add new project")}
+                        tone="primary"
+                        onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
                       />
                     </View>
-                  ) : null}
-                </>
-              )}
-            </View>
+                    {canStartScratch ? (
+                      <View>
+                        <Button
+                          label={gt("Start without a project")}
+                          tone="secondary"
+                          onPress={() => void startScratch()}
+                        />
+                      </View>
+                    ) : null}
+                  </>
+                )}
+              </View>
+              {hermesRows}
+            </>
           ) : visibleScopes.length === 0 ? (
             <View className="items-center gap-2 px-6 py-8">
               <Text className="text-center text-lg font-t3-bold text-foreground">
@@ -560,7 +771,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                       }
                       subtitleNumberOfLines={1}
                       subtitleEllipsizeMode="middle"
-                      disabled={reservedDestinationProject !== null}
+                      disabled={reservedDestinationProject !== null || startingHermes}
                       onPress={() => chooseProject(selectionTarget)}
                       leading={
                         <ProjectFavicon
@@ -583,7 +794,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel={scope.title}
-                      disabled={reservedDestinationProject !== null}
+                      disabled={reservedDestinationProject !== null || startingHermes}
                       onPress={() => chooseProject(selectionTarget)}
                       className="flex-row items-center gap-3 bg-grouped-card px-4 py-3.5"
                     >
