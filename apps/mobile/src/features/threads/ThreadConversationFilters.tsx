@@ -137,7 +137,7 @@ export function ThreadConversationFilters(props: {
       appAtomRegistry.get(environmentShell.statusAtom(environmentId)) === "live" &&
       readEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
     const readConfig = () => appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
-    try {
+    await (async () => {
       await waitForComposerDraftsLoaded();
       if (!resolveHermesHomeModel(readConfig(), instanceId, null, isLiveAndAllowed())) return;
       const result = await openScratch({ environmentId, input: {} });
@@ -158,12 +158,14 @@ export function ThreadConversationFilters(props: {
         name: "Thread",
         params: { draft: { draftId, title: selectedHome.displayName } },
       });
-    } catch {
-      Dialog.alert(gt("Could not open draft"));
-    } finally {
-      starting.current = false;
-      setIsStarting(false);
-    }
+    })()
+      .catch(() => {
+        Dialog.alert(gt("Could not open draft"));
+      })
+      .finally(() => {
+        starting.current = false;
+        setIsStarting(false);
+      });
   }
   return (
     <ScrollView

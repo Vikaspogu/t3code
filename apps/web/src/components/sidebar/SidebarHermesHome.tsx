@@ -2,6 +2,7 @@ import type { HermesConversationHome } from "@t3tools/client-runtime/state/conve
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useEnvironmentScope } from "../../state/session";
 import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
+import { SidebarHermesIcon } from "./SidebarHermesIcon";
 import { useGT } from "gt-react";
 import { memo } from "react";
 import { cn } from "~/lib/utils";
@@ -41,6 +42,7 @@ export const SidebarHermesHome = memo(function SidebarHermesHome(props: {
           onClick={props.onToggle}
           className="flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
+          <SidebarHermesIcon className="ml-1 size-5" />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-sidebar-foreground">
               {props.home.displayName}
