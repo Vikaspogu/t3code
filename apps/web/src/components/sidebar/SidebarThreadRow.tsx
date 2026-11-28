@@ -39,11 +39,9 @@ import {
 
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
-  ActivityIcon,
   AlarmClockIcon,
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
-  BellIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -58,7 +56,6 @@ import {
   ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
-  TriangleAlertIcon,
   Undo2Icon,
   UserRoundIcon,
   XIcon,
@@ -124,6 +121,7 @@ import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { SidebarHermesIcon } from "./SidebarHermesIcon";
 import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
@@ -863,16 +861,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         }
                       : null;
   const isWokeStatus = topStatus?.icon === "woke";
-  const OrganizationStatusIcon =
-    topStatus === null
-      ? null
-      : status === "approval" || status === "input" || status === "request" || status === "limited"
-        ? BellIcon
-        : status === "failed"
-          ? TriangleAlertIcon
-          : isUnread
-            ? CheckIcon
-            : ActivityIcon;
+  const OrganizationStatusIcon = topStatus === null ? null : TOP_STATUS_ICONS[topStatus.icon];
   const compactPinnedReason = !props.compactPinnedPreview
     ? null
     : status === "failed"
@@ -1359,7 +1348,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </span>
   ) : null;
 
-  const hasOrganizationActions = props.settlementSupported || showSnoozeButton || hasUnsentDraft;
+  const hasOrganizationActions =
+    props.settlementSupported ||
+    (variantAction === "unsnooze" && props.snoozeSupported) ||
+    showSnoozeButton ||
+    hasUnsentDraft;
   if (variant === "organization") {
     return (
       <li
@@ -1401,7 +1394,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           >
             {draftIndicator}
             {pinIndicator}
-            {props.project ? (
+            {providerEntry?.driverKind === "hermes" ? (
+              <SidebarHermesIcon className="size-3.5" />
+            ) : props.project ? (
               <ProjectFavicon project={props.project} className="size-3.5 shrink-0" />
             ) : null}
             {title}
@@ -1504,7 +1499,45 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         environmentId={thread.environmentId}
                       />
                     ) : null}
-                    {props.settlementSupported ? (
+                    {variantAction === "unsnooze" ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={gt("Wake thread now")}
+                              onClick={handleUnsnoozeClick}
+                              onPointerDown={handleActionPointerDown}
+                              className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                            />
+                          }
+                        >
+                          <AlarmClockOffIcon className="size-3.5" />
+                        </TooltipTrigger>
+                        <TooltipPopup>
+                          <T>Wake thread now</T>
+                        </TooltipPopup>
+                      </Tooltip>
+                    ) : variantAction === "unsettle" ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={gt("Un-settle thread")}
+                              onClick={handleUnsettleClick}
+                              onPointerDown={handleActionPointerDown}
+                              className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                            />
+                          }
+                        >
+                          <Undo2Icon className="size-3.5" />
+                        </TooltipTrigger>
+                        <TooltipPopup>
+                          <T>Un-settle thread</T>
+                        </TooltipPopup>
+                      </Tooltip>
+                    ) : props.settlementSupported ? (
                       <Tooltip>
                         <TooltipTrigger
                           render={

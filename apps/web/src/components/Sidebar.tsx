@@ -77,10 +77,14 @@ import {
 } from "@t3tools/client-runtime/state/threads";
 
 import {
+  BellIcon,
   CheckIcon,
   ChevronDownIcon,
+  CircleCheckIcon,
+  CircleDashedIcon,
   FolderIcon,
   FolderPlusIcon,
+  ListIcon,
   PlusIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -191,6 +195,7 @@ import {
 import {
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
+  hasUnseenCompletion,
   groupSidebarThreadsByProject,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
@@ -228,6 +233,7 @@ import {
   resolvePinnedSidebarVisibleThreads,
   resolvePinnedSidebarHiddenCount,
   resolveSidebarThreadStatus,
+  resolveThreadLastVisitedAt,
   selectPinnedSidebarPreview,
   routeThreadOnly,
 } from "./Sidebar.logic";
@@ -270,6 +276,7 @@ import { titleRegenerationToast } from "./threadTitleRegenerationToast";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
 import { isProjectPinShortcut, ProjectPinButton } from "./ProjectPinButton";
 import {
   Combobox,
@@ -284,7 +291,7 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
-import { TooltipProvider } from "./ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -402,6 +409,7 @@ const sidebarShellStatusesAtom = environmentAtomList(
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const EMPTY_DRAFT_IDS: readonly DraftId[] = [];
+const EMPTY_LAST_VISITED: Record<string, string> = {};
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -521,6 +529,9 @@ function useSidebarThreads(input: {
     inboxReturns.getSnapshot,
   );
   const pinnedStatusEnabled = useClientSettings((s) => s.sidebarPinnedStatusEnabled);
+  const localLastVisitedAtById = useUiStateStore((state) =>
+    pinnedStatusEnabled ? state.threadLastVisitedAtById : EMPTY_LAST_VISITED,
+  );
 
   const hermesHomeStates = useAtomValue(
     pinnedStatusEnabled ? sidebarHermesHomeStatesAtom : EMPTY_HERMES_HOME_STATES_ATOM,
@@ -595,6 +606,7 @@ function useSidebarThreads(input: {
   const conversationCounts = {
     all: partition.visibleThreads.length,
     "needs-you": 0,
+    completed: 0,
     running: 0,
     unknown: 0,
   };
@@ -602,11 +614,24 @@ function useSidebarThreads(input: {
   let selectedOutsideLens: EnvironmentThreadShell | undefined;
   if (pinnedStatusEnabled) {
     for (const thread of partition.visibleThreads) {
+      const key = threadShellKey(thread);
       const activity = conversationActivity(thread, liveEnvironmentIds.has(thread.environmentId));
-      if (activity !== "idle") conversationCounts[activity]++;
+      const completed =
+        activity === "idle" &&
+        thread.latestRun?.status === "completed" &&
+        hasUnseenCompletion({
+          ...thread,
+          lastVisitedAt: resolveThreadLastVisitedAt(
+            thread.lastVisitedAt,
+            localLastVisitedAtById[key],
+          ),
+        });
+      const lensActivity = completed ? "completed" : activity;
+      if (completed) conversationCounts.completed++;
+      else if (activity !== "idle") conversationCounts[activity]++;
       if (lens === "all") continue;
-      if (activity === lens) lensMatches.push(thread);
-      else if (threadShellKey(thread) === routeRowThreadKey) selectedOutsideLens = thread;
+      if (lensActivity === lens) lensMatches.push(thread);
+      else if (key === routeRowThreadKey) selectedOutsideLens = thread;
     }
   }
   // With no pinned threads there is nothing to hide and no header to re-expand,
@@ -3434,6 +3459,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? shortcutLabelForCommand(keybindings, "chat.newLocal")
       : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+  const conversationLenses = [
+    ["all", gt("All"), conversationCounts.all, ListIcon],
+    ["needs-you", gt("Needs input"), conversationCounts["needs-you"], BellIcon],
+    ["completed", gt("Completed"), conversationCounts.completed, CircleCheckIcon],
+    ["running", gt("Running"), conversationCounts.running, CircleDashedIcon],
+  ] as const;
   return (
     <SidebarFolderDrop>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -3690,33 +3721,97 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               onClearSearch={clearThreadSearch}
             />
             {pinnedStatusEnabled && !isSearchingThreads ? (
-              <div className="space-y-1 px-2 pb-2">
-                <div
-                  role="group"
-                  aria-label={gt("Filter loaded conversations")}
-                  className="flex h-7 items-center gap-4"
-                >
-                  {(
-                    [
-                      ["all", gt("All"), conversationCounts.all],
-                      ["needs-you", gt("Needs you"), conversationCounts["needs-you"]],
-                      ["running", gt("Running"), conversationCounts.running],
-                    ] as const
-                  ).map(([lens, label, count]) => (
-                    <button
-                      type="button"
-                      key={lens}
-                      aria-pressed={activeConversationLens === lens}
-                      className="inline-flex h-7 cursor-pointer items-center gap-1 border-b-2 border-transparent text-sm font-medium text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-pressed:border-sidebar-foreground aria-pressed:text-sidebar-foreground"
-                      onClick={() => setConversationLens(lens)}
-                    >
-                      {label}
-                      {count !== null ? (
-                        <span className="text-2xs text-muted-foreground tabular-nums">{count}</span>
-                      ) : null}
-                    </button>
-                  ))}
+              <div className="space-y-1.5 px-2 pb-2">
+                <div className="flex items-center gap-1.5 px-1 text-3xs font-medium tracking-wide text-sidebar-muted-foreground uppercase">
+                  <span>{gt("Conversations")}</span>
+                  <span aria-hidden className="opacity-45">
+                    /
+                  </span>
+                  <span>
+                    {conversationLenses.find(([lens]) => lens === activeConversationLens)?.[1]}
+                  </span>
                 </div>
+                <TooltipProvider delay={150}>
+                  <div
+                    role="radiogroup"
+                    aria-label={gt("Filter loaded conversations")}
+                    className="grid h-9 grid-cols-4 gap-0.5 rounded-lg border border-sidebar-border/70 bg-gradient-to-b from-muted/80 to-muted/35 p-0.5"
+                    onKeyDown={(event) => {
+                      const currentIndex = conversationLenses.findIndex(
+                        ([lens]) => lens === activeConversationLens,
+                      );
+                      const direction =
+                        event.key === "ArrowRight" || event.key === "ArrowDown"
+                          ? 1
+                          : event.key === "ArrowLeft" || event.key === "ArrowUp"
+                            ? -1
+                            : 0;
+                      const nextIndex =
+                        event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? conversationLenses.length - 1
+                            : direction === 0
+                              ? -1
+                              : (currentIndex + direction + conversationLenses.length) %
+                                conversationLenses.length;
+                      const nextLens =
+                        nextIndex === -1 ? undefined : conversationLenses[nextIndex]?.[0];
+                      if (nextLens === undefined) return;
+                      event.preventDefault();
+                      setConversationLens(nextLens);
+                      const targets =
+                        event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+                      targets[nextIndex]?.focus();
+                    }}
+                  >
+                    {conversationLenses.map(([lens, label, count, Icon]) => {
+                      const attention = lens === "needs-you" && count > 0;
+                      const hasCompleted = lens === "completed" && count > 0;
+                      const hasRunning = lens === "running" && count > 0;
+                      return (
+                        <Tooltip key={lens}>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                role="radio"
+                                aria-checked={activeConversationLens === lens}
+                                aria-label={`${label} ${count > 99 ? "99+" : count}`}
+                                tabIndex={activeConversationLens === lens ? 0 : -1}
+                                className={cn(
+                                  "flex h-7 min-w-0 cursor-pointer items-center justify-center gap-1 rounded-md border border-transparent px-1 text-sidebar-muted-foreground outline-none hover:bg-accent/35 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-checked:border-sidebar-border aria-checked:bg-accent/45 aria-checked:text-sidebar-foreground aria-checked:shadow-xs",
+                                  attention && "text-warning-foreground",
+                                  hasCompleted && "text-success-foreground",
+                                  hasRunning && "text-info-foreground",
+                                )}
+                                onClick={() => setConversationLens(lens)}
+                              />
+                            }
+                          >
+                            <Icon aria-hidden className="size-3.5 shrink-0" />
+                            <Badge
+                              aria-hidden
+                              size="sm"
+                              variant={
+                                attention
+                                  ? "warning"
+                                  : lens === "completed"
+                                    ? "success"
+                                    : lens === "running"
+                                      ? "info"
+                                      : "secondary"
+                              }
+                            >
+                              {count > 99 ? "99+" : count}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipPopup side="bottom">{label}</TooltipPopup>
+                        </Tooltip>
+                      );
+                    })}
+                  </div>
+                </TooltipProvider>
                 {conversationCounts.unknown > 0 ? (
                   <p className="px-1 text-xs text-muted-foreground">
                     {gt(
@@ -3919,19 +4014,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
+                        const isSnoozed = snoozedThreadKeys.has(threadKey);
+                        const isSettled = settledThreadKeys.has(threadKey);
+                        const variantAction = isSnoozed
+                          ? "unsnooze"
+                          : isSettled
+                            ? "unsettle"
+                            : "settle";
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
                         const rowVariant = folderRow
                           ? folderRowsMultiline
                             ? "folder-multiline"
                             : "folder"
-                          : isFilteringConversations
-                            ? "slim"
-                            : isCard
-                              ? pinnedStatusEnabled
-                                ? "organization"
-                                : "card"
-                              : "slim";
+                          : isFilteringConversations || isCard
+                            ? pinnedStatusEnabled
+                              ? "organization"
+                              : "card"
+                            : "slim";
                         const isCompactPinnedPreview =
                           rowVariant === "organization" &&
                           pinnedPreviewThread !== null &&
@@ -3985,13 +4085,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                     ? `shelf:${section}`
                                     : undefined))
                             }
-                            variantAction={
-                              section === "snoozed"
-                                ? "unsnooze"
-                                : section === "settled"
-                                  ? "unsettle"
-                                  : "settle"
-                            }
+                            variantAction={variantAction}
                             settlementSupported={serverConfigs.has(thread.environmentId)}
                             snoozeSupported={serverConfigs.has(thread.environmentId)}
                             pinningSupported={serverConfigs.has(thread.environmentId)}
@@ -4008,7 +4102,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               actionSweep?.keys.has(threadKey) ? actionSweep.action : null
                             }
                             snoozeWakeLabelText={
-                              section === "snoozed" && thread.snoozedUntil != null
+                              isSnoozed && thread.snoozedUntil != null
                                 ? snoozeWakeLabel(
                                     thread.snoozedUntil,
                                     { now: new Date().toISOString() },
@@ -4105,8 +4199,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               role="status"
                             >
                               {activeConversationLens === "needs-you"
-                                ? gt("Nothing needs you")
-                                : gt("Nothing is running")}
+                                ? gt("Nothing needs input")
+                                : activeConversationLens === "completed"
+                                  ? gt("No completed results")
+                                  : gt("Nothing is running")}
                             </li>,
                           );
                         }

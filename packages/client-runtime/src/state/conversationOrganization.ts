@@ -60,7 +60,7 @@ export function groupConversationsByHome<
   return { hermes, coding };
 }
 
-export type ConversationLens = "all" | "needs-you" | "running";
+export type ConversationLens = "all" | "needs-you" | "completed" | "running";
 
 type ConversationAttentionInput = Parameters<typeof isThreadWorking>[0] &
   Pick<EnvironmentThreadShell, "pendingGuestMessageCount">;

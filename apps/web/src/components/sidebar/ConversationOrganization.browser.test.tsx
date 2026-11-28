@@ -638,18 +638,19 @@ it("filters live requests across Hermes and coding without changing collapse sta
   await expect.element(screen.getByText("Hermes usage limit", { exact: true })).toBeVisible();
   expect(screen.getByText("1 needs you", { exact: true }).elements()).toHaveLength(1);
   expect(screen.getByText("2 need you", { exact: true }).elements()).toHaveLength(0);
-  const all = screen.getByRole("button", { name: /^All\s*\d+$/ });
-  const needsYou = screen.getByRole("button", { name: /^Needs you\s*2$/ });
-  const runningFilter = screen.getByRole("button", { name: /^Running\s*1$/ });
+  const all = screen.getByRole("radio", { name: /^All\s*\d+$/ });
+  const needsYou = screen.getByRole("radio", { name: /^Needs input\s*2$/ });
+  const runningFilter = screen.getByRole("radio", { name: /^Running\s*1$/ });
   const alphaHome = screen.getByRole("button", { name: "Cluster Alpha conversations" });
   const openOutsideFilter = screen.getByText("Open conversation (outside filter)");
-  await expect.element(all).toHaveAttribute("aria-pressed", "true");
+  await expect.element(all).toHaveAttribute("aria-checked", "true");
   await expect.element(all).toHaveAccessibleName("All 5");
+  expect(alphaHome.element().querySelector('[data-testid="sidebar-hermes-icon"]')).not.toBeNull();
   await userEvent.click(alphaHome);
   await expect.element(screen.getByText("Hermes request")).not.toBeInTheDocument();
   await userEvent.click(needsYou);
-  await expect.element(needsYou).toHaveAttribute("aria-pressed", "true");
-  await expect.element(runningFilter).toHaveAttribute("aria-pressed", "false");
+  await expect.element(needsYou).toHaveAttribute("aria-checked", "true");
+  await expect.element(runningFilter).toHaveAttribute("aria-checked", "false");
   await expect.element(screen.getByText("Coding request")).toBeVisible();
   await expect.element(screen.getByText("Hermes request")).toBeVisible();
   await expect.element(screen.getByText("Hermes idle")).not.toBeInTheDocument();
@@ -657,6 +658,7 @@ it("filters live requests across Hermes and coding without changing collapse sta
   const hermesRow = screen.getByText("Hermes request").elements()[0]?.closest("[data-sidebar-row]");
   expect(codingRow?.textContent).toContain("No project");
   expect(hermesRow?.textContent).toContain("Cluster Alpha");
+  expect(hermesRow?.querySelector('[data-testid="sidebar-hermes-icon"]')).not.toBeNull();
   await expect.element(screen.getByText("Hermes working")).not.toBeInTheDocument();
   using navigate = vi.spyOn(screen.router!, "navigate").mockResolvedValue(undefined);
   await userEvent.keyboard("{Control>}1{/Control}");
@@ -688,17 +690,27 @@ it("filters live requests across Hermes and coding without changing collapse sta
   );
 
   await userEvent.click(runningFilter);
-  await expect.element(runningFilter).toHaveAttribute("aria-pressed", "true");
-  await expect.element(needsYou).toHaveAttribute("aria-pressed", "false");
+  await expect.element(runningFilter).toHaveAttribute("aria-checked", "true");
+  await expect.element(needsYou).toHaveAttribute("aria-checked", "false");
   await expect.element(screen.getByText("Coding request")).not.toBeInTheDocument();
   await expect.element(screen.getByText("Hermes working")).toBeVisible();
+  const runningRow = screen
+    .getByText("Hermes working")
+    .elements()[0]
+    ?.closest("[data-sidebar-row]");
+  const runningOrganizationRow = runningRow;
+  expect(runningOrganizationRow?.getAttribute("data-testid")).toBe("sidebar-row-card");
+  expect(runningOrganizationRow).not.toBeNull();
+  expect(runningOrganizationRow?.textContent).toContain("Cluster Beta");
+  expect(runningOrganizationRow?.textContent).toContain("Working");
+  expect(runningOrganizationRow?.querySelector("svg.lucide-circle-dashed")).not.toBeNull();
   vi.mocked(useThreadRouteTarget).mockReturnValue({
     kind: "server",
     threadRef: scopeThreadRef(local, idle.id),
   });
   vi.mocked(useQuietThreadShells).mockReturnValue([coding, hermes, idle, limited]);
   await screen.rerender(sidebarElement());
-  await userEvent.click(screen.getByRole("button", { name: /^All 4$/ }));
+  await userEvent.click(screen.getByRole("radio", { name: /^All 4$/ }));
   await expect.element(all).toHaveAccessibleName("All 4");
   await expect.element(screen.getByText("Nothing is running")).toBeVisible();
   await expect.element(openOutsideFilter).toBeVisible();
@@ -709,6 +721,177 @@ it("filters live requests across Hermes and coding without changing collapse sta
   await expect.element(openOutsideFilter).not.toBeInTheDocument();
   await expect.element(screen.getByText("Hermes idle")).toBeVisible();
   expect(openScratch).not.toHaveBeenCalled();
+});
+
+it("lists only unread completed results and clears them after a visit", async () => {
+  using _fixture = setup();
+  const latestRun = {
+    runId: "completed-run" as never,
+    status: "completed" as const,
+    assistantMessageId: null,
+    requestedAt: "2026-01-02T00:00:00.000Z",
+    startedAt: "2026-01-02T00:00:00.000Z",
+    completedAt: "2026-01-02T00:01:00.000Z",
+  };
+  const completed = makeThreadFixture({
+    environmentId: local,
+    projectId: project().id,
+    providerInstanceId: alpha,
+    id: ThreadId.make("completed-result"),
+    title: "Completed result",
+    lastVisitedAt: "2026-01-02T00:00:30.000Z",
+    runtime: {
+      providerInstanceId: alpha,
+      providerName: "Hermes",
+      lastError: null,
+      updatedAt: "2026-01-02T00:01:00.000Z",
+      status: "completed",
+      activeRunId: null,
+    },
+    latestRun,
+  });
+  const running = makeThreadFixture({
+    environmentId: local,
+    projectId: project().id,
+    providerInstanceId: beta,
+    id: ThreadId.make("still-running"),
+    title: "Still running",
+    lastVisitedAt: "2026-01-02T00:00:30.000Z",
+    runtime: {
+      providerInstanceId: beta,
+      providerName: "Hermes",
+      lastError: null,
+      updatedAt: "2026-01-02T00:01:00.000Z",
+      status: "running",
+      activeRunId: null,
+    },
+    latestRun,
+  });
+  const failed = {
+    ...completed,
+    id: ThreadId.make("failed-result"),
+    title: "Failed result",
+    latestRun: { ...latestRun, status: "failed" as const },
+  };
+  vi.mocked(useQuietThreadShells).mockReturnValue([completed, running, failed]);
+
+  await using screen = await mount();
+  const completedFilter = screen.getByRole("radio", { name: "Completed 1" });
+  await expect.element(screen.getByRole("radio", { name: "Running 1" })).toBeVisible();
+  await userEvent.click(completedFilter);
+  await expect.element(screen.getByText("Completed result", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("Still running", { exact: true })).not.toBeInTheDocument();
+  await expect.element(screen.getByText("Failed result", { exact: true })).not.toBeInTheDocument();
+
+  vi.mocked(useQuietThreadShells).mockReturnValue([
+    { ...completed, lastVisitedAt: "2026-01-03T00:00:00.000Z" },
+    running,
+    failed,
+  ]);
+  await screen.rerender(sidebarElement());
+  await expect
+    .element(screen.getByRole("radio", { name: "Completed 0" }))
+    .toHaveAccessibleName("Completed 0");
+  await expect.element(screen.getByText("No completed results", { exact: true })).toBeVisible();
+  await expect
+    .element(screen.getByText("Completed result", { exact: true }))
+    .not.toBeInTheDocument();
+});
+
+it("keeps settled and snoozed actions on shared filtered rows", async () => {
+  vi.setSystemTime(new Date("2026-06-01T00:00:00.000Z"));
+  using _fixture = setup();
+  const latestRun = {
+    turnId: "filtered-action-turn" as never,
+    runId: "filtered-action-run" as never,
+    status: "completed" as const,
+    assistantMessageId: null,
+    requestedAt: "2026-01-02T00:00:00.000Z",
+    startedAt: "2026-01-02T00:00:00.000Z",
+    completedAt: "2026-01-02T00:01:00.000Z",
+  };
+  const completedThread = (id: string, title: string) => ({
+    environmentId: local,
+    projectId: project().id,
+    id: ThreadId.make(id),
+    title,
+    lastVisitedAt: "2026-01-02T00:00:30.000Z",
+    runtime: {
+      providerInstanceId: alpha,
+      providerName: "Hermes",
+      lastError: null,
+      updatedAt: "2026-01-02T00:01:00.000Z",
+      status: "completed" as const,
+      activeRunId: null,
+    },
+    latestRun,
+  });
+  vi.mocked(useQuietThreadShells).mockReturnValue([
+    makeThreadFixture({
+      ...completedThread("settled-filtered", "Settled result"),
+      settledAt: "2026-01-02T00:02:00.000Z",
+      settledOverride: "settled",
+    }),
+    makeThreadFixture({
+      ...completedThread("snoozed-filtered", "Snoozed result"),
+      snoozedUntil: "2027-01-01T00:00:00.000Z",
+    }),
+  ]);
+  await using screen = await mount();
+  await userEvent.click(screen.getByRole("radio", { name: "Completed 2" }));
+  const filteredRow = (title: string) => {
+    const row = [...document.querySelectorAll<HTMLElement>("[data-sidebar-row]")].find(
+      (element) =>
+        element.textContent?.includes(title) &&
+        element.getAttribute("data-sidebar-parent") === null,
+    );
+    if (!row) throw new Error(`Missing filtered row: ${title}`);
+    return row;
+  };
+  const settledRow = filteredRow("Settled result");
+  await userEvent.hover(settledRow);
+  expect(settledRow.innerHTML).toContain('aria-label="Un-settle thread"');
+  const snoozedRow = filteredRow("Snoozed result");
+  await userEvent.hover(snoozedRow);
+  expect(snoozedRow.innerHTML).toContain('aria-label="Wake thread now"');
+});
+
+it("caps large filter counts and supports keyboard lens navigation", async () => {
+  using _fixture = setup();
+  vi.mocked(useQuietThreadShells).mockReturnValue(
+    Array.from({ length: 100 }, (_, index) =>
+      makeThreadFixture({
+        environmentId: local,
+        projectId: project().id,
+        id: ThreadId.make(`lens-thread-${index}`),
+        title: `Lens thread ${index}`,
+        hasPendingApprovals: index === 0,
+      }),
+    ),
+  );
+
+  await using screen = await mount();
+  const all = screen.getByRole("radio", { name: "All 99+" });
+  const needsInput = screen.getByRole("radio", { name: "Needs input 1" });
+  expect(all.element().textContent).toContain("99+");
+  expect(needsInput.element().className).toContain("text-warning-foreground");
+  await userEvent.hover(needsInput);
+  await expect.element(screen.getByText("Needs input", { exact: true })).toBeVisible();
+
+  await userEvent.click(all);
+  await userEvent.keyboard("{ArrowRight}");
+  await expect.element(needsInput).toHaveAttribute("aria-checked", "true");
+  await expect.element(needsInput).toHaveFocus();
+  await userEvent.keyboard("{End}");
+  await expect
+    .element(screen.getByRole("radio", { name: "Running 0" }))
+    .toHaveAttribute("aria-checked", "true");
+  await userEvent.keyboard("{Home}");
+  await expect.element(all).toHaveAttribute("aria-checked", "true");
+  await userEvent.keyboard("{ArrowLeft}");
+  await expect
+    .element(screen.getByRole("radio", { name: "Running 0" }))
+    .toHaveAttribute("aria-checked", "true");
 });
 
 it("jumps to visible conversations in sidebar order when a Hermes home collapses", async () => {
@@ -926,9 +1109,9 @@ it("keeps only the eligible fresh open draft in a filtered list and announces it
   });
 
   await using screen = await mount();
-  const needsYou = screen.getByRole("button", { name: /^Needs you\s*0$/ });
+  const needsYou = screen.getByRole("radio", { name: /^Needs input\s*0$/ });
   await userEvent.click(needsYou);
-  await expect.element(needsYou).toHaveAttribute("aria-pressed", "true");
+  await expect.element(needsYou).toHaveAttribute("aria-checked", "true");
   await screen.rerender(sidebarElement());
 
   const rows = screen.getByTestId("sidebar-draft-row");
@@ -1011,7 +1194,7 @@ it.each(["reply", "thread", "environment"] as const)(
     }
 
     await using screen = await mount();
-    await userEvent.click(screen.getByRole("button", { name: /^Needs you\s*0$/ }));
+    await userEvent.click(screen.getByRole("radio", { name: /^Needs input\s*0$/ }));
     const row = screen.getByTestId("sidebar-draft-row");
     await expect.element(row).toHaveAccessibleName("0 attachments, Unsent draft, No project");
     await expect.element(screen.getByText("0 attachments", { exact: true })).toBeVisible();
@@ -1022,7 +1205,7 @@ it.each(["reply", "thread", "environment"] as const)(
     await expect.element(legacyRow).toHaveAccessibleName("0 attachments, Unsent draft, No project");
     await expect.element(legacy.getByText("0 attachments", { exact: true })).toBeVisible();
     await expect
-      .element(legacy.getByRole("button", { name: /^All\s*\d+$/ }))
+      .element(legacy.getByRole("radio", { name: /^All\s*\d+$/ }))
       .not.toBeInTheDocument();
     using legacyNavigate = vi.spyOn(legacy.router!, "navigate").mockResolvedValue(undefined);
     await userEvent.keyboard("{F1}");
@@ -1174,14 +1357,16 @@ it("summarizes every collapsed pin, discloses hidden pins, and keeps a visited f
   await expect.element(screen.getByText("Failed", { exact: true })).toBeVisible();
   await expect.element(screen.getByText("agent stopped", { exact: true })).toBeVisible();
 
-  await userEvent.click(screen.getByRole("button", { name: /^Needs you\s*0$/ }));
+  await userEvent.click(screen.getByRole("radio", { name: /^Needs input\s*0$/ }));
   const filteredFailedRow = screen
-    .getByTestId("sidebar-row-slim")
+    .getByTestId("sidebar-row-card")
     .elements()
     .find((row) => row.textContent?.includes("Failed monitor"));
-  await expect.element(filteredFailedRow!).toHaveAccessibleName("Failed monitor, Cluster Alpha");
-  expect(filteredFailedRow?.textContent).not.toContain("agent stopped");
-  await userEvent.click(screen.getByRole("button", { name: /^All\s*4$/ }));
+  await expect
+    .element(filteredFailedRow!)
+    .toHaveAccessibleName("Failed monitor, Failed, Cluster Alpha");
+  expect(filteredFailedRow?.textContent).toContain("agent stopped");
+  await userEvent.click(screen.getByRole("radio", { name: /^All\s*4$/ }));
   await userEvent.click(screen.getByRole("button", { name: /^Pinned/ }));
   const expandedFilteredFailedRow = screen
     .getByTestId("sidebar-row-card")
